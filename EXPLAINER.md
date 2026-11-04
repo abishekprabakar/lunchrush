@@ -314,8 +314,81 @@ What delta sync costs in return:
 - **Computation.** The sender has to compare every piece against the peer's vector. (Real systems
   index this. lunchrush keeps it simple and scans.)
 
-Milestone 2 measures the actual bytes sent by both approaches in a simulated lunch rush.
-Those measured numbers will go here and in `results.md`.
+### What the benchmark measured
+
+The numbers below are pasted in by `pnpm bench` from its latest run (section 7 explains the setup):
+
+<!-- bench:summary -->
+Measured by `pnpm bench` over 5 seeded runs of the lunch-rush outage (medians; full details in [results.md](results.md)).
+
+| Engine | Orders lost | Status edits lost | Converged after reconnect | Total bytes | Internet bytes |
+| --- | --: | --: | --: | --: | --: |
+| CRDT, delta sync | 0 | 0 | 1.28 s | 1.25 MB | 0.56 MB |
+| CRDT, full-state sync | 0 | 0 | 1.37 s | 48.99 MB | 1.21 MB |
+| Naive last-write-wins | 41 | 19 | 0.82 s | 8.73 MB | 0.28 MB |
+
+Delta sync sent 39.3x fewer bytes than full-state sync in total, but only 2.1x fewer over the internet. 35% of the bytes in delta-sync answers taught the receiver nothing new.
+<!-- /bench:summary -->
+
+Three things stand out, and they hold for every seed in `results.md`:
+
+1. **Almost all of full-state sync's bytes are on the in-store network.** During the outage the
+   three devices keep syncing every second. Whenever anything changed, full-state sync sends the
+   whole store, which grows to 220 orders. Delta sync sends just the new edits.
+2. **Over the internet, the gap is much smaller.** After ten minutes offline, the cloud really is
+   missing most of the data, and any protocol has to send it. Delta sync can only skip what the
+   cloud already had, and after an outage this long that is not much.
+3. **Delta sync still wastes some bytes.** Right after reconnecting, the cloud sends its version
+   vector to all three devices at the same moment, and each one answers with the same missing
+   edits. Most of the later answers repeat what the first one delivered. A fix would be to ask one
+   peer at a time when far behind, or to remember which edits are already on their way.
+
+---
+
+## 7. Simulating a lunch rush (`packages/sim`)
+
+Testing sync on real devices is slow and hard to repeat. So Milestone 2 runs everything in one
+process, in **simulated time**.
+
+**A discrete-event simulator** (`simulation.ts`) keeps a virtual clock and a queue of things that
+will happen at future times: "deliver this message at 12:04:31.250", "the kitchen marks order 17
+ready at 12:05:02". It repeatedly takes the earliest item and runs it. Nothing waits for real time, so
+twelve simulated minutes take a fraction of a second. All randomness comes from a seeded generator,
+so a given seed always gives exactly the same run, byte for byte.
+
+**The network** (`network.ts`) connects named nodes with links. Each link has:
+
+- **latency** and **jitter**: a base delay plus a random extra. Jitter means messages can arrive out
+  of order.
+- **loss** and **duplication**: some messages vanish, and some arrive twice.
+- **bandwidth**: big messages take time to send, and messages queue behind each other. The three
+  devices' internet links share one queue, like a store behind a single router.
+- **up or down**: cutting a link is how outages and partitions are modelled. Messages already in
+  flight on a cut link are lost.
+
+Every message is turned into JSON on send and parsed on arrival. That is how bytes are counted, and
+it guarantees the receiver gets its own copy, never a shared object.
+
+**Anti-entropy gossip** (`gossip.ts`): every second, each node sends its version vector to every node
+it can currently reach. A peer that has edits the node is missing answers with exactly those. Every
+node also serves what it learned from others, so in the scenario, where the drive-thru tablet and the
+kitchen display can't reach each other, their edits relay through the counter. That's multihop.
+
+**The scenario** (`lunch-rush.ts`): three devices and a cloud node. After a one-minute online warm-up,
+the internet goes down for ten minutes. Staff keep taking orders and moving them through the
+kitchen. Then the internet comes back. We measure how long the cloud takes to catch up, whether
+anything was lost or duplicated, and how many bytes went over each kind of link.
+
+**Same workload for every engine** (`workload.ts`). What the staff do is generated up front from the
+seed: which device takes which order when, and who moves it to which stage. Each engine (CRDT with
+delta sync, CRDT with full-state sync, and the naive baseline) faces exactly the same rush. A
+device only makes a status edit if its own screen allows it: it must know the order and see it
+at an earlier stage. If the order has vanished from that device, as happens with the baseline, the
+edit is skipped and counted.
+
+**Reading the results.** The naive baseline converges *fastest* after reconnect. That isn't a win:
+its document is smaller because it lost orders. Convergence only means "everyone agrees". The
+other columns show whether they agree on the right thing.
 
 ---
 
@@ -336,3 +409,6 @@ Those measured numbers will go here and in `results.md`.
   and always moves past timestamps it has received.
 - **Anti-entropy**: the background process of peers comparing version vectors and sending each other
   what is missing.
+- **Discrete-event simulation**: running a system on a virtual clock by processing scheduled events
+  in time order, instead of waiting for real time.
+- **Multihop**: two devices that can't reach each other syncing through a third that reaches both.

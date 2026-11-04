@@ -14,7 +14,7 @@ safe, how version vectors decide what to send, and why delta sync saves bandwidt
 ## Status
 
 - [x] Milestone 1: core sync engine (`packages/core`)
-- [ ] Milestone 2: network simulator and lunch-rush outage benchmark
+- [x] Milestone 2: network simulator and lunch-rush outage benchmark (`packages/sim`)
 - [ ] Milestone 3: real LAN mode (UDP multicast discovery, WebSockets, optional cloud relay)
 - [ ] Milestone 4: demo UI (its sync log will report status writes that lose to a further stage)
 - [ ] Milestone 5: polish and CI
@@ -27,7 +27,22 @@ Requires Node 20.19 or newer.
 corepack enable     # provides the pinned pnpm version
 pnpm install
 pnpm check          # lint + typecheck + all tests
+pnpm bench          # run the lunch-rush outage benchmark; writes results.md
 ```
+
+## Results
+
+<!-- bench:summary -->
+Measured by `pnpm bench` over 5 seeded runs of the lunch-rush outage (medians; full details in [results.md](results.md)).
+
+| Engine | Orders lost | Status edits lost | Converged after reconnect | Total bytes | Internet bytes |
+| --- | --: | --: | --: | --: | --: |
+| CRDT, delta sync | 0 | 0 | 1.28 s | 1.25 MB | 0.56 MB |
+| CRDT, full-state sync | 0 | 0 | 1.37 s | 48.99 MB | 1.21 MB |
+| Naive last-write-wins | 41 | 19 | 0.82 s | 8.73 MB | 0.28 MB |
+
+Delta sync sent 39.3x fewer bytes than full-state sync in total, but only 2.1x fewer over the internet. 35% of the bytes in delta-sync answers taught the receiver nothing new.
+<!-- /bench:summary -->
 
 ## Known limitations
 
@@ -53,4 +68,13 @@ packages/core/src
   replica.ts         one device: local edits, deltaFor(versionVector), merge(delta)
   baseline.ts        naive whole-document last-write-wins, for comparison
 packages/core/test   example tests plus fast-check property tests
+
+packages/sim/src
+  simulation.ts      discrete-event clock and event queue
+  network.ts         links with latency, jitter, loss, duplicates, bandwidth and partitions
+  engines.ts         the three things being compared: CRDT delta, CRDT full-state, naive baseline
+  gossip.ts          a node running anti-entropy gossip (version vectors out, missing edits back)
+  workload.ts        the staff's orders and status edits, generated from a seed
+  lunch-rush.ts      the outage scenario and its scoring
+  report.ts, bench.ts  results.md and the summaries above
 ```
