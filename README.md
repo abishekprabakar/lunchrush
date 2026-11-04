@@ -35,7 +35,7 @@ pnpm check          # lint + typecheck + all tests
 packages/core/src
   hlc.ts             hybrid logical clock
   causal-context.ts  dots, version vectors, causal contexts
-  lww.ts             last-writer-wins register
+  register.ts        registers: last-writer-wins, and forward-only for order status
   awmap.ts           add-wins map with tombstones
   order-doc.ts       the order document: merge, delta extraction, view
   replica.ts         one device: local edits, deltaFor(versionVector), merge(delta)

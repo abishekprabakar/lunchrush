@@ -46,9 +46,14 @@ Three things are wrong here:
 - **"Last" depends on clocks, and clocks lie.** If the counter's clock runs two minutes fast, its
   edits win even when they really happened first.
 
-The fix is not to abandon LWW entirely. It is to stop applying it to the *whole document*. lunchrush
-uses LWW only for a single value where one answer really is right (an order's status), and uses
-structures that keep everything for collections (the orders, the line items).
+The fix is not to abandon LWW entirely. It is to stop applying it to the *whole document*, and to
+pick a merge rule per field that matches what the field means. lunchrush uses:
+
+- **LWW** only for single values where the newest answer really is the right one: the customer
+  details, and an item's quantity.
+- **A forward-only register** for the order's status, because an order's stage has a direction:
+  "ready" should never be undone by a stale "cooking" (section 4).
+- **Structures that keep everything** for collections: the orders and the line items.
 
 ---
 
@@ -79,15 +84,18 @@ And some don't:
 
 So the trick is to build every piece of state out of unions and maxes. In lunchrush:
 
-- The **status** of an order is a *last-writer-wins register*: merging keeps the write with the larger
-  timestamp. That is a max.
+- The **status** of an order is a *forward-only register*: merging keeps the write with the furthest
+  stage. That is a max over stages.
+- The **customer details** and each **item's quantity** are *last-writer-wins registers*: merging keeps
+  the write with the larger timestamp. That is a max over timestamps.
 - The **orders** and the **line items** are *add-wins maps*: merging takes the union of the "added"
   markers and the union of the "removed" markers. Those are unions.
 - The record of **which edits a replica has seen** (its causal context) is a union of ranges.
 
 `packages/core/test/properties.test.ts` checks these laws directly on hundreds of random states, and
 also runs hundreds of random histories on 3 replicas where messages are reordered, duplicated and
-dropped, then checks that every replica ends up with an identical state, with no order or item lost.
+dropped, then checks that every replica ends up with an identical state, with no order or item lost,
+and that no device ever shows an order's status moving backwards, not even for a moment.
 
 ---
 
@@ -121,16 +129,87 @@ add-wins map. For each key the map keeps:
 - `value`: the key's value, which is itself a CRDT.
 
 A key is visible if at least one of its adds is not covered by a tombstone. A remove can only cover the
-adds it has **already seen**. So if the counter cancels an order while the kitchen, offline, marks it
-"cooking", the kitchen's edit has a dot the cancel never saw. After syncing, that dot is still live and
-the order is still there. The add wins.
+adds it has **already seen**. So if the counter removes the fries from an order while the kitchen,
+offline, changes the fries to a large, the kitchen's edit has a dot the remove never saw. After
+syncing, that dot is still live and the fries are still on the order. The add wins.
 
-For a restaurant that is the right default: it is better to make one extra sandwich than to silently
-lose an order someone is still working on. If the counter really wants it gone, it cancels again after
-seeing the kitchen's edit, and that cancel covers everything.
+For line items that is the right default: it is better to make an extra side of fries than to silently
+drop something a coworker just touched. If the counter really wants them gone, it removes them again
+after seeing the kitchen's edit, and that remove covers everything.
+
+For whole orders, removal is used for one thing only: **cleaning finished orders off the screen**
+(`removeFinishedOrder`, which refuses anything not picked up or canceled). Canceling is *not* a
+removal; see "Cancel is a stage, not a removal" below.
 
 Removed keys are never deleted from memory; their tombstones stay forever. That is a known limitation
 (see the README). Real systems clean them up once every device is known to have seen the removal.
+
+### The status: a forward-only register (`register.ts`)
+
+An order moves through stages in one direction:
+
+```
+new  ->  cooking  ->  ready  ->  picked_up  ->  canceled
+```
+
+With LWW, the newest *timestamp* wins. That goes wrong in a lunch rush. The kitchen marks an order
+"ready". The counter, offline and still seeing "new", taps "cooking" a second later. When they sync,
+LWW keeps "cooking" because it was written last, and a finished order jumps back onto the grill.
+
+A **forward-only register** compares *stages* instead of times: merging two status writes keeps the
+one that is further along. "ready" beats "cooking" no matter when or where each was written. If two
+devices reach the *same* stage, it keeps the earlier write, so the timestamp shown with the status
+means "ready since 12:03", when it first became ready.
+
+**Why it still converges.** Both kinds of register work the same way: every write gets a position in a
+fixed ordering, and merging keeps the write that comes later in that ordering. LWW orders writes by
+timestamp. Forward-only orders them by stage, then by timestamp to break ties. Either way, merging is
+taking a *max*, and max is commutative, associative and idempotent. Put plainly: picture every status
+write anyone ever made for an order. Each device holds the "biggest" write it has heard about so far.
+The biggest of a set doesn't depend on the order you looked at its members, how you grouped them, or
+how many times you saw each one. So once every device has heard about every write, they all hold the
+same one. Changing the ordering only changes *which* write they agree on.
+
+Two things make this work, and both are worth noticing:
+
+- **Every pair of writes must be comparable.** The stages form a single line, and two different
+  writes never share a timestamp, so there is always exactly one biggest write. If we added a stage
+  that is neither before nor after another, say "refunded" next to "picked_up", "keep the furthest"
+  would have no answer for those two. We would need a tiebreak rule or a different design.
+- **A bonus guarantee: the screen never goes backwards.** With LWW, a device can show "ready", then
+  receive a stale "cooking" that has a later timestamp and switch back to "cooking". With
+  forward-only, a device's register only ever moves up, so its display only ever moves forward. The
+  property tests check this after every single edit and message.
+
+`setStatus` also refuses a backwards move on the local device (it throws), because the merge would
+ignore that write anyway, so it is almost certainly a bug in the caller.
+
+### Cancel is a stage, not a removal
+
+At first, canceling removed the order from the add-wins map. But add-wins means a concurrent edit
+beats the removal, so if the counter canceled an order while the kitchen, offline, marked it
+"ready", the order came back to life after the sync.
+
+Now "canceled" is simply the **last stage**. Nothing is further along, so once any device cancels an
+order, every merge keeps "canceled", whatever else happened concurrently. A canceled order stays in the
+map (it still shows up, marked canceled) until someone cleans it up.
+
+Cleanup is still an add-wins removal, so a concurrent edit to a finished order can bring it back. But
+it comes back *still finished*, because its status register comes back with it. The worst case is a
+finished order reappearing in the "done" list until it is cleaned up again (`orders.test.ts`,
+"cleanup is add-wins").
+
+### What these choices cost
+
+- **No undo.** If someone taps "ready" by mistake, nothing can move it back to "cooking". A real
+  system would need an explicit correction, such as a separate "recall" edit that the kitchen display
+  also takes into account.
+- **Cancel beats everything, including "picked up".** If one device marks an order picked up while
+  another cancels it, the result is "canceled". That is a business rule encoded in the stage order,
+  and the merge just enforces it. If "picked up" should win instead, swap the last two stages.
+- **Edits that race a cancel are kept, but don't matter.** Items added concurrently with a cancel
+  are still merged into the order. The order just shows as canceled.
+- **Canceled orders take space until cleanup.** They are no longer removed automatically.
 
 ### The order document (`order-doc.ts`)
 
@@ -138,8 +217,8 @@ Putting it together, the whole store is:
 
 ```
 orders: add-wins map, order id ->
-  info:   LWW register   { customer, channel }
-  status: LWW register   new | cooking | ready | picked_up
+  info:   LWW register           { customer, channel }
+  status: forward-only register  new -> cooking -> ready -> picked_up -> canceled
   items:  add-wins map, item id -> LWW register { name, qty }
 context: which edits this state already includes
 ```
@@ -184,8 +263,8 @@ A few details matter:
   `counter: 3`, because version vectors only count edits with no gaps. On the next sync the peer
   resends 4 and 5. Getting 5 twice is harmless, because the merge is idempotent.
 - **A delta is like a patch: it assumes a base.** A delta cut for a peer at `{counter: 41}` leaves out
-  things that peer already has. For example, a status write that was overwritten by a later one, which
-  the peer already has. A device that is *behind* that base and receives the delta anyway (say, it
+  things that peer already has. For example, a status write that lost a merge to a write the peer
+  already has. A device that is *behind* that base and receives the delta anyway (say, it
   was delivered to the wrong place) keeps the data, since merging data is always safe. But it does not
   mark those edits as seen in its version vector. The next normal sync fills in the rest
   (`sync.test.ts`, "a delta merged without its base").
@@ -224,6 +303,9 @@ Those measured numbers will go here and in `results.md`.
 - **Version vector**: per device, the highest edit number seen with no gaps.
 - **Causal context**: the exact set of edits a replica has seen, including any beyond a gap.
 - **Tombstone**: a marker that says "this edit removed those adds". It is kept so the removal can sync.
+- **LWW register**: holds one value; merging keeps the write with the latest timestamp.
+- **Forward-only register**: holds one value from an ordered list of stages; merging keeps the write
+  furthest along the list.
 - **HLC**: hybrid logical clock. A timestamp that stays close to real time but never goes backwards
   and always moves past timestamps it has received.
 - **Anti-entropy**: the background process of peers comparing version vectors and sending each other
