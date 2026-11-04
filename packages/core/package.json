@@ -1,0 +1,10 @@
+{
+  "name": "@lunchrush/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hand-written delta-state CRDTs for restaurant orders: HLC timestamps, add-wins maps, LWW registers, version-vector delta sync.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
