@@ -16,6 +16,7 @@ import {
   emptyDoc,
   joinDocs,
   joinOrders,
+  statusRank,
   viewOrders,
   type DocState,
   type LineItem,
@@ -104,7 +105,16 @@ export class Replica {
     }));
   }
 
+  /**
+   * Move an order to a later stage. Moving backwards (or to the same stage) is
+   * refused: the merge would ignore such a write anyway, so it is almost
+   * certainly a bug in the caller.
+   */
   setStatus(orderId: string, status: Status): Delta {
+    const current = this.statusOf(orderId);
+    if (statusRank(status) <= statusRank(current)) {
+      throw new Error(`order ${orderId} is already ${current}; status only moves forward`);
+    }
     return this.edit((dot, hlc) => ({
       [orderId]: { adds: { [dot]: true }, tombs: {}, value: { status: { value: status, hlc, dot }, items: {} } },
     }));
@@ -114,6 +124,11 @@ export class Replica {
   cancelOrder(orderId: string): Delta {
     const seen = awLiveDots(this.doc.orders[orderId]);
     return this.edit((dot) => ({ [orderId]: { adds: {}, tombs: { [dot]: seen } } }));
+  }
+
+  /** The local stage of an order, even one removed from the map. */
+  statusOf(orderId: string): Status {
+    return this.doc.orders[orderId]?.value?.status?.value ?? 'new';
   }
 
   /** A unique id for a new order or item, e.g. "order-kitchen-3". */

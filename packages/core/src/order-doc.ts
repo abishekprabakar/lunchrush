@@ -8,10 +8,18 @@ import {
   type VersionVector,
 } from './causal-context';
 import { compareHlc, type Hlc } from './hlc';
-import { lwwJoin, type Lww } from './lww';
+import { forwardJoin, lwwJoin, type Write } from './register';
 
-export type Status = 'new' | 'cooking' | 'ready' | 'picked_up';
-export const STATUSES: readonly Status[] = ['new', 'cooking', 'ready', 'picked_up'];
+/** The stages of an order, in the only direction it can move. */
+export const STATUSES = ['new', 'cooking', 'ready', 'picked_up'] as const;
+export type Status = (typeof STATUSES)[number];
+
+/** How far along a stage is: new = 0, cooking = 1, ... */
+export function statusRank(status: Status): number {
+  return STATUSES.indexOf(status);
+}
+
+const statusJoin = forwardJoin(statusRank);
 
 export interface OrderInfo {
   customer: string;
@@ -26,13 +34,13 @@ export interface LineItem {
 /**
  * The CRDT value of one order:
  *   info   - who ordered and where, a last-writer-wins register
- *   status - new / cooking / ready / picked_up, a last-writer-wins register on the HLC
+ *   status - a forward-only register: merge keeps the furthest stage, never a stale earlier one
  *   items  - line items, an add-wins map of last-writer-wins registers
  */
 export interface OrderValue {
-  info?: Lww<OrderInfo>;
-  status?: Lww<Status>;
-  items: AwMap<Lww<LineItem>>;
+  info?: Write<OrderInfo>;
+  status?: Write<Status>;
+  items: AwMap<Write<LineItem>>;
 }
 
 /**
@@ -48,14 +56,14 @@ export function emptyDoc(): DocState {
   return { orders: {}, context: {} };
 }
 
-function orderValue(info?: Lww<OrderInfo>, status?: Lww<Status>, items: OrderValue['items'] = {}): OrderValue {
+function orderValue(info?: Write<OrderInfo>, status?: Write<Status>, items: OrderValue['items'] = {}): OrderValue {
   return { ...(info ? { info } : {}), ...(status ? { status } : {}), items };
 }
 
 function joinOrderValue(a: OrderValue | undefined, b: OrderValue | undefined): OrderValue | undefined {
   if (!a) return b;
   if (!b) return a;
-  return orderValue(lwwJoin(a.info, b.info), lwwJoin(a.status, b.status), awJoin(a.items, b.items, lwwJoin));
+  return orderValue(lwwJoin(a.info, b.info), statusJoin(a.status, b.status), awJoin(a.items, b.items, lwwJoin));
 }
 
 export function joinOrders(a: AwMap<OrderValue>, b: AwMap<OrderValue>): AwMap<OrderValue> {
@@ -77,11 +85,11 @@ export function joinDocs(a: DocState, b: DocState): DocState {
  */
 export function docSince(doc: DocState, vv: VersionVector): DocState {
   const keep = (dot: Dot) => !vvIncludes(vv, dot);
-  const keepLww = <T>(reg: Lww<T> | undefined) => (reg && keep(reg.dot) ? reg : undefined);
+  const keepWrite = <T>(reg: Write<T> | undefined) => (reg && keep(reg.dot) ? reg : undefined);
   const filterValue = (v: OrderValue): OrderValue | undefined => {
-    const info = keepLww(v.info);
-    const status = keepLww(v.status);
-    const items = awFilter(v.items, keep, (item) => keepLww(item));
+    const info = keepWrite(v.info);
+    const status = keepWrite(v.status);
+    const items = awFilter(v.items, keep, (item) => keepWrite(item));
     if (!info && !status && isEmpty(items)) return undefined;
     return orderValue(info, status, items);
   };
@@ -100,6 +108,8 @@ export interface OrderView {
   info?: OrderInfo;
   createdAt?: Hlc;
   status: Status;
+  /** When the order first reached its current stage. */
+  statusSince?: Hlc;
   items: ItemView[];
 }
 
@@ -119,6 +129,7 @@ export function viewOrders(orders: AwMap<OrderValue>): OrderView[] {
       info: value.info?.value,
       createdAt: value.info?.hlc,
       status: value.status?.value ?? 'new',
+      statusSince: value.status?.hlc,
       items,
     });
   }

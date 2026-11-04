@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Replica } from '../src';
+import { compareHlc, Replica } from '../src';
 
 /** Two devices that start in sync. Each has its own controllable wall clock. */
 function twoDevices(skewMs = 0) {
@@ -83,26 +83,67 @@ describe('orders as an add-wins map', () => {
   });
 });
 
-describe('status as a last-writer-wins register on the HLC', () => {
-  it('concurrent status changes resolve to the same winner everywhere', () => {
+describe('status is a forward-only register', () => {
+  it('a stale "cooking" never overwrites "ready", even when it has the later timestamp', () => {
+    const { counter, kitchen, tick, syncBoth } = twoDevices(-60_000); // kitchen clock a minute slow
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    syncBoth();
+    // offline: the kitchen finishes the order, and the counter, not knowing, marks it cooking
+    tick();
+    const ready = kitchen.setStatus('o1', 'ready');
+    tick();
+    const cooking = counter.setStatus('o1', 'cooking');
+    expect(compareHlc(cooking.clock, ready.clock)).toBe(1); // last-writer-wins would pick "cooking"
+    syncBoth();
+    expect(counter.order('o1')?.status).toBe('ready');
+    expect(kitchen.order('o1')?.status).toBe('ready');
+  });
+
+  it('concurrent stages resolve to the furthest one, regardless of time or device id', () => {
     const { counter, kitchen, tick, syncBoth } = twoDevices();
     counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
     syncBoth();
     tick();
     counter.setStatus('o1', 'picked_up');
-    kitchen.setStatus('o1', 'ready'); // same wall time; the device id breaks the tie
+    tick();
+    kitchen.setStatus('o1', 'ready'); // later, and "kitchen" > "counter", but an earlier stage
     syncBoth();
-    expect(counter.order('o1')?.status).toBe(kitchen.order('o1')?.status);
-    expect(counter.order('o1')?.status).toBe('ready'); // "kitchen" > "counter"
+    expect(counter.order('o1')?.status).toBe('picked_up');
+    expect(kitchen.state()).toEqual(counter.state());
   });
 
+  it('when two devices reach the same stage, both keep the earlier write', () => {
+    const { counter, kitchen, tick, syncBoth } = twoDevices();
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    syncBoth();
+    tick();
+    const first = kitchen.setStatus('o1', 'ready');
+    tick();
+    counter.setStatus('o1', 'ready');
+    syncBoth();
+    expect(counter.order('o1')?.statusSince).toEqual(first.clock);
+    expect(kitchen.state()).toEqual(counter.state());
+  });
+
+  it('refuses to move an order backwards locally', () => {
+    const { counter } = twoDevices();
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    counter.setStatus('o1', 'ready');
+    expect(() => counter.setStatus('o1', 'cooking')).toThrow(/only moves forward/);
+    expect(() => counter.setStatus('o1', 'ready')).toThrow(/only moves forward/);
+    expect(counter.order('o1')?.status).toBe('ready');
+  });
+});
+
+describe('info and line items are last-writer-wins on the HLC', () => {
   it('an edit made after seeing another wins, even if its wall clock is behind', () => {
     const { counter, kitchen, syncBoth } = twoDevices(-60_000); // kitchen clock a minute slow
     counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
-    counter.setStatus('o1', 'cooking');
+    counter.addItem('o1', 'fries', { name: 'fries', qty: 1 });
+    counter.updateItem('o1', 'fries', { name: 'fries', qty: 2 });
     syncBoth();
-    kitchen.setStatus('o1', 'ready');
+    kitchen.updateItem('o1', 'fries', { name: 'fries', qty: 3 });
     syncBoth();
-    expect(counter.order('o1')?.status).toBe('ready');
+    expect(counter.order('o1')?.items).toEqual([{ id: 'fries', name: 'fries', qty: 3 }]);
   });
 });

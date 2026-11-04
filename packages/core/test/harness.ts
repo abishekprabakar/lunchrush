@@ -4,7 +4,7 @@
  * edit so we can check afterwards that nothing was lost.
  */
 import fc from 'fast-check';
-import { compareHlc, Replica, STATUSES, type Delta, type Hlc, type Status, type VersionVector } from '../src';
+import { Replica, STATUSES, statusRank, type Delta, type Status, type VersionVector } from '../src';
 
 const MENU = ['sandwich', 'nuggets', 'fries', 'lemonade', 'cookie'];
 
@@ -13,7 +13,7 @@ export type Op =
   | { k: 'add'; o: number; name: string; qty: number }
   | { k: 'update'; o: number; i: number; qty: number }
   | { k: 'remove'; o: number; i: number }
-  | { k: 'status'; o: number; s: Status }
+  | { k: 'status'; o: number; s: number } // s picks one of the stages ahead of the current one
   | { k: 'cancel'; o: number };
 
 export type Cmd =
@@ -27,7 +27,7 @@ const opArb: fc.Arbitrary<Op> = fc.oneof(
   { arbitrary: fc.record({ k: fc.constant('add' as const), o: fc.nat(), name: fc.constantFrom(...MENU), qty: fc.integer({ min: 1, max: 3 }) }), weight: 3 },
   { arbitrary: fc.record({ k: fc.constant('update' as const), o: fc.nat(), i: fc.nat(), qty: fc.integer({ min: 1, max: 9 }) }), weight: 1 },
   { arbitrary: fc.record({ k: fc.constant('remove' as const), o: fc.nat(), i: fc.nat() }), weight: 1 },
-  { arbitrary: fc.record({ k: fc.constant('status' as const), o: fc.nat(), s: fc.constantFrom(...STATUSES) }), weight: 2 },
+  { arbitrary: fc.record({ k: fc.constant('status' as const), o: fc.nat(), s: fc.nat() }), weight: 2 },
   { arbitrary: fc.record({ k: fc.constant('cancel' as const), o: fc.nat() }), weight: 1 },
 );
 
@@ -58,7 +58,8 @@ export class World {
   readonly cancelled = new Set<string>();
   readonly addedItems = new Map<string, string>(); // itemId -> orderId
   readonly removedItems = new Set<string>();
-  readonly statusWrites = new Map<string, { hlc: Hlc; status: Status }[]>();
+  readonly statusWrites = new Map<string, Status[]>();
+  private readonly furthestSeen = new Map<string, number>(); // `${replica}/${order}` -> stage rank
 
   constructor(
     skews: number[],
@@ -78,6 +79,7 @@ export class World {
       case 'op': {
         this.time += cmd.tick;
         const delta = this.edit(this.replicas[cmd.r], cmd.op);
+        this.checkStatusesOnlyMoveForward();
         if (delta && this.broadcastEdits) {
           for (let to = 0; to < 3; to++) if (to !== cmd.r) this.inFlight.push({ to, delta });
         }
@@ -112,6 +114,7 @@ export class World {
       for (const a of this.replicas) {
         for (const b of this.replicas) {
           if (a !== b) learned += b.merge(a.deltaFor(b.versionVector())).newEdits;
+          this.checkStatusesOnlyMoveForward();
         }
       }
       if (learned === 0) return;
@@ -124,6 +127,7 @@ export class World {
     const receiver = this.replicas[message.to];
     if ('delta' in message) {
       receiver.merge(message.delta);
+      this.checkStatusesOnlyMoveForward();
     } else {
       this.inFlight.push({ to: message.asker, delta: receiver.deltaFor(message.vv) });
     }
@@ -156,7 +160,9 @@ export class World {
         return r.removeItem(orderId, item.id);
       }
       case 'status': {
-        const delta = r.setStatus(orderId, op.s);
+        const ahead = STATUSES.filter((s) => statusRank(s) > statusRank(r.statusOf(orderId)));
+        if (ahead.length === 0) return undefined;
+        const delta = r.setStatus(orderId, ahead[op.s % ahead.length]);
         this.recordStatus(orderId, delta);
         return delta;
       }
@@ -169,14 +175,26 @@ export class World {
   private recordStatus(orderId: string, delta: Delta): void {
     const write = delta.orders[orderId].value?.status;
     if (!write) throw new Error('status edit without a status write');
-    const writes = this.statusWrites.get(orderId) ?? [];
-    writes.push({ hlc: write.hlc, status: write.value });
-    this.statusWrites.set(orderId, writes);
+    this.statusWrites.set(orderId, [...(this.statusWrites.get(orderId) ?? []), write.value]);
   }
 
-  /** The status every replica should end on: the write with the highest HLC. */
+  /** The status every replica should end on: the furthest stage anyone wrote, whatever the timestamps. */
   expectedStatus(orderId: string): Status | undefined {
     const writes = this.statusWrites.get(orderId) ?? [];
-    return [...writes].sort((a, b) => compareHlc(a.hlc, b.hlc)).pop()?.status;
+    return [...writes].sort((a, b) => statusRank(a) - statusRank(b)).pop();
+  }
+
+  /** On every device, at every moment, no order's status may ever move back to an earlier stage. */
+  private checkStatusesOnlyMoveForward(): void {
+    for (const replica of this.replicas) {
+      for (const order of replica.orders()) {
+        const key = `${replica.id}/${order.id}`;
+        const rank = statusRank(order.status);
+        if (rank < (this.furthestSeen.get(key) ?? 0)) {
+          throw new Error(`${order.id} moved back to ${order.status} on ${replica.id}`);
+        }
+        this.furthestSeen.set(key, rank);
+      }
+    }
   }
 }
