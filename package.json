@@ -8,12 +8,15 @@
     "node": ">=20.19"
   },
   "scripts": {
+    "dev": "pnpm --filter @lunchrush/demo dev",
+    "build": "pnpm --filter @lunchrush/demo build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "typecheck": "tsc -p .",
     "check": "eslint . && tsc -p . && vitest run",
-    "bench": "tsx packages/sim/src/bench.ts"
+    "bench": "tsx packages/sim/src/bench.ts",
+    "all": "pnpm check && pnpm bench && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
