@@ -10,8 +10,8 @@ up when it comes back, with no lost orders, no duplicates and no lost edits.
 
 > **A learning project inspired by [Ditto](https://ditto.com)** and its offline-first, peer-to-peer
 > sync, including Chick-fil-A's use of it in their restaurants. lunchrush is not a Ditto product and
-> uses no Ditto code. The merge logic is written by hand, without Automerge or Yjs, to understand how
-> it really works.
+> uses no Ditto code. The merge logic is written from scratch, without a CRDT library like Automerge
+> or Yjs, to understand how it really works.
 
 ## The story
 
