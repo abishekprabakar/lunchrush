@@ -1,0 +1,13 @@
+{
+  "name": "@lunchrush/sim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "In-process network simulator for lunchrush: devices, a cloud node, latency, loss, partitions, gossip and the lunch-rush outage benchmark.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@lunchrush/core": "workspace:*"
+  }
+}
