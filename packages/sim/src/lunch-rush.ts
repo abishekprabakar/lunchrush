@@ -1,4 +1,4 @@
-import { isFinished, statusRank, type OrderView, type Status } from '@lunchrush/core';
+import { canMoveTo, statusRank, type OrderView, type Status } from '@lunchrush/core';
 import { createEngine, type EngineKind } from './engines';
 import { SimNode, type WireMessage } from './gossip';
 import { Network, type LinkConfig } from './network';
@@ -52,7 +52,7 @@ export interface LunchRushResult {
   statusPlanned: number;
   /** Status edits a device actually made. */
   statusApplied: number;
-  /** Status edits a device refused: it didn't know the order yet, or already saw it at or past that stage. */
+  /** Status edits a device refused: it didn't know the order yet, or its own screen didn't allow the change. */
   statusSkipped: number;
   /** Orders created on some device but missing on at least one node at the end. */
   ordersLost: number;
@@ -121,7 +121,7 @@ export function runLunchRush(engine: EngineKind, seed: number, config: LunchRush
       return;
     }
     const seen = store.order(intent.orderId);
-    if (!seen || isFinished(seen.status) || statusRank(intent.status) <= statusRank(seen.status)) {
+    if (!seen || !canMoveTo(seen.status, intent.status)) {
       statusSkipped++;
       return;
     }

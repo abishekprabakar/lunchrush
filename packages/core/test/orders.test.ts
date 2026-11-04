@@ -189,10 +189,26 @@ describe('finished orders are read-only on a device that sees them as finished',
     expect(() => counter.addItem('o1', 'cookie', { name: 'cookie', qty: 1 })).toThrow(refused);
     expect(() => counter.updateItem('o1', 'fries', { name: 'fries', qty: 2 })).toThrow(refused);
     expect(() => counter.removeItem('o1', 'fries')).toThrow(refused);
-    expect(() => counter.setStatus('o1', 'picked_up')).toThrow(refused);
+    expect(() => counter.setStatus('o1', 'ready')).toThrow(refused);
     expect(() => counter.cancelOrder('o1')).toThrow(refused);
     expect(() => counter.createOrder('o1', { customer: 'Sam', channel: 'counter' })).toThrow(refused);
     expect(() => counter.removeFinishedOrder('o1')).not.toThrow(); // cleanup is the one thing allowed
+  });
+
+  it('a device that sees an order canceled can still record the pick-up, and nothing else', () => {
+    const { counter, kitchen, syncBoth } = twoDevices();
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    counter.setStatus('o1', 'ready');
+    counter.cancelOrder('o1');
+    syncBoth();
+    // the customer shows up and takes the bag anyway: the kitchen records what physically happened
+    kitchen.setStatus('o1', 'picked_up');
+    syncBoth();
+    expect(counter.order('o1')?.status).toBe('picked_up');
+    expect(kitchen.state()).toEqual(counter.state());
+    // now picked up, so every edit is refused, including going back to canceled
+    expect(() => kitchen.cancelOrder('o1')).toThrow(/finished orders can't be edited/);
+    expect(() => kitchen.setStatus('o1', 'picked_up')).toThrow(/finished orders can't be edited/);
   });
 
   it('still merges edits made elsewhere before that device saw the order finish', () => {

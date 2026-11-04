@@ -207,8 +207,11 @@ stays in the map (it still shows up, marked canceled) until someone cleans it up
 ### Finished orders are read-only, locally
 
 Once a device sees an order as canceled or picked up, it refuses any new edit to it: no items, no
-status changes, no re-creating it. Only cleanup is allowed. This is a rule in the device's edit
-methods (`assertEditable` in `replica.ts`), **not** in the merge. Edits made on another device
+status changes, no re-creating it. There are two exceptions. Cleanup is allowed, and a canceled
+order can still be marked **picked up**: if the customer takes the bag anyway, the device should be
+able to record what physically happened, and the merge would let that pick-up win regardless. This is
+a rule in the device's edit methods (`canMoveTo` in `order-doc.ts`, `assertEditable` in `replica.ts`),
+**not** in the merge. Edits made on another device
 *before* that device heard about the finish are still merged normally (`orders.test.ts`, "still merges
 edits made elsewhere").
 
@@ -228,8 +231,6 @@ finished order reappearing in the "done" list until it is cleaned up again (`ord
   also takes into account.
 - **The stage order is a business rule.** Pick-up beats cancel because it is what physically
   happened. The merge just enforces whichever order we choose.
-- **A device that shows "canceled" can't record a pick-up.** The local read-only rule blocks it. A
-  pick-up only wins if it was recorded on a device that hadn't yet heard about the cancel.
 - **Edits that race a cancel are kept, but don't matter.** Items added concurrently with a cancel
   are still merged into the order. The order just shows as canceled.
 - **Stale writes lose silently** (until Milestone 4's sync log reports them).

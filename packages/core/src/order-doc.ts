@@ -25,6 +25,17 @@ export function isFinished(status: Status): boolean {
   return status === 'picked_up' || status === 'canceled';
 }
 
+/**
+ * The local rule for changing an order's status on a device: only forward, and
+ * never out of a finished stage, with one exception. A device that sees an order
+ * as canceled may still mark it picked up, because the pick-up is what physically
+ * happened and it wins in the merge anyway.
+ */
+export function canMoveTo(current: Status, next: Status): boolean {
+  if (statusRank(next) <= statusRank(current)) return false;
+  return !isFinished(current) || (current === 'canceled' && next === 'picked_up');
+}
+
 /** How far along a stage is: new = 0, cooking = 1, ... */
 export function statusRank(status: Status): number {
   return STATUSES.indexOf(status);

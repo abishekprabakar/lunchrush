@@ -17,8 +17,8 @@ import {
   emptyDoc,
   joinDocs,
   joinOrders,
+  canMoveTo,
   isFinished,
-  statusRank,
   viewOrders,
   type DocState,
   type LineItem,
@@ -113,12 +113,13 @@ export class Replica {
   /**
    * Move an order to a later stage. Moving backwards (or to the same stage) is
    * refused: the merge would ignore such a write anyway, so it is almost
-   * certainly a bug in the caller.
+   * certainly a bug in the caller. Finished orders are refused too, except that
+   * a canceled order can still be marked picked up (see `canMoveTo`).
    */
   setStatus(orderId: string, status: Status): Delta {
-    this.assertEditable(orderId);
     const current = this.statusOf(orderId);
-    if (statusRank(status) <= statusRank(current)) {
+    if (!canMoveTo(current, status)) {
+      this.assertEditable(orderId);
       throw new Error(`order ${orderId} is already ${current}; status only moves forward`);
     }
     return this.edit((dot, hlc) => ({
@@ -153,7 +154,8 @@ export class Replica {
   }
 
   /**
-   * Once this device sees an order as picked up or canceled, it refuses to edit it.
+   * Once this device sees an order as picked up or canceled, it refuses to edit it
+   * (the only exceptions are cleanup, and marking a canceled order picked up).
    * This is a local rule only: the merge is unchanged, so edits made elsewhere
    * before that device saw the order finish still merge normally.
    */

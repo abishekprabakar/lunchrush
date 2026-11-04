@@ -4,7 +4,7 @@
  * edit so we can check afterwards that nothing was lost.
  */
 import fc from 'fast-check';
-import { isFinished, Replica, STATUSES, statusRank, type Delta, type Status, type VersionVector } from '../src';
+import { canMoveTo, isFinished, Replica, STATUSES, statusRank, type Delta, type Status, type VersionVector } from '../src';
 
 const MENU = ['sandwich', 'nuggets', 'fries', 'lemonade', 'cookie'];
 
@@ -147,8 +147,10 @@ export class World {
     const known = Object.keys(r.state().orders); // includes cleaned-up orders, so edits can race a cleanup
     if (known.length === 0) return undefined;
     const orderId = known[op.o % known.length];
-    // Devices refuse edits to orders they see as finished; only cleanup is allowed.
-    if (op.k !== 'cleanup' && isFinished(r.statusOf(orderId))) return undefined;
+    // Devices follow the local rules: items can't change on finished orders, status only moves as canMoveTo allows.
+    const current = r.statusOf(orderId);
+    const itemEdit = op.k === 'add' || op.k === 'update' || op.k === 'remove';
+    if (itemEdit && isFinished(current)) return undefined;
     switch (op.k) {
       case 'add': {
         const itemId = r.newId('item');
@@ -165,13 +167,14 @@ export class World {
         return r.removeItem(orderId, item.id);
       }
       case 'status': {
-        const ahead = STATUSES.filter((s) => s !== 'canceled' && statusRank(s) > statusRank(r.statusOf(orderId)));
+        const ahead = STATUSES.filter((s) => s !== 'canceled' && canMoveTo(current, s)); // includes picking up a canceled order
         if (ahead.length === 0) return undefined;
         const delta = r.setStatus(orderId, ahead[op.s % ahead.length]);
         this.recordStatus(orderId, delta);
         return delta;
       }
       case 'cancel': {
+        if (!canMoveTo(current, 'canceled')) return undefined;
         this.canceled.add(orderId);
         const delta = r.cancelOrder(orderId);
         this.recordStatus(orderId, delta);
