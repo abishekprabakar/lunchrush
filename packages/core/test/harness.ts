@@ -4,7 +4,7 @@
  * edit so we can check afterwards that nothing was lost.
  */
 import fc from 'fast-check';
-import { Replica, STATUSES, statusRank, type Delta, type Status, type VersionVector } from '../src';
+import { isFinished, Replica, STATUSES, statusRank, type Delta, type Status, type VersionVector } from '../src';
 
 const MENU = ['sandwich', 'nuggets', 'fries', 'lemonade', 'cookie'];
 
@@ -14,7 +14,8 @@ export type Op =
   | { k: 'update'; o: number; i: number; qty: number }
   | { k: 'remove'; o: number; i: number }
   | { k: 'status'; o: number; s: number } // s picks one of the stages ahead of the current one
-  | { k: 'cancel'; o: number };
+  | { k: 'cancel'; o: number }
+  | { k: 'cleanup'; o: number };
 
 export type Cmd =
   | { t: 'op'; r: number; op: Op; tick: number }
@@ -29,6 +30,7 @@ const opArb: fc.Arbitrary<Op> = fc.oneof(
   { arbitrary: fc.record({ k: fc.constant('remove' as const), o: fc.nat(), i: fc.nat() }), weight: 1 },
   { arbitrary: fc.record({ k: fc.constant('status' as const), o: fc.nat(), s: fc.nat() }), weight: 2 },
   { arbitrary: fc.record({ k: fc.constant('cancel' as const), o: fc.nat() }), weight: 1 },
+  { arbitrary: fc.record({ k: fc.constant('cleanup' as const), o: fc.nat() }), weight: 1 },
 );
 
 export function cmdsArb(options: { drops: boolean; maxLength?: number }): fc.Arbitrary<Cmd[]> {
@@ -55,7 +57,8 @@ export class World {
 
   // Bookkeeping for the "nothing was lost" checks.
   readonly created = new Set<string>();
-  readonly cancelled = new Set<string>();
+  readonly canceled = new Set<string>();
+  readonly cleanedUp = new Set<string>();
   readonly addedItems = new Map<string, string>(); // itemId -> orderId
   readonly removedItems = new Set<string>();
   readonly statusWrites = new Map<string, Status[]>();
@@ -141,7 +144,7 @@ export class World {
       this.recordStatus(id, delta);
       return delta;
     }
-    const known = Object.keys(r.state().orders); // includes cancelled orders, so edits can race a cancel
+    const known = Object.keys(r.state().orders); // includes cleaned-up orders, so edits can race a cleanup
     if (known.length === 0) return undefined;
     const orderId = known[op.o % known.length];
     switch (op.k) {
@@ -160,15 +163,24 @@ export class World {
         return r.removeItem(orderId, item.id);
       }
       case 'status': {
-        const ahead = STATUSES.filter((s) => statusRank(s) > statusRank(r.statusOf(orderId)));
+        const ahead = STATUSES.filter((s) => s !== 'canceled' && statusRank(s) > statusRank(r.statusOf(orderId)));
         if (ahead.length === 0) return undefined;
         const delta = r.setStatus(orderId, ahead[op.s % ahead.length]);
         this.recordStatus(orderId, delta);
         return delta;
       }
-      case 'cancel':
-        this.cancelled.add(orderId);
-        return r.cancelOrder(orderId);
+      case 'cancel': {
+        if (r.statusOf(orderId) === 'canceled') return undefined;
+        this.canceled.add(orderId);
+        const delta = r.cancelOrder(orderId);
+        this.recordStatus(orderId, delta);
+        return delta;
+      }
+      case 'cleanup': {
+        if (!r.order(orderId) || !isFinished(r.statusOf(orderId))) return undefined;
+        this.cleanedUp.add(orderId);
+        return r.removeFinishedOrder(orderId);
+      }
     }
   }
 

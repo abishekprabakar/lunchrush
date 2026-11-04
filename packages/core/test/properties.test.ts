@@ -23,15 +23,19 @@ function expectNothingLost(world: World): void {
   for (const replica of world.replicas) {
     const orders = new Map(replica.orders().map((o) => [o.id, o]));
     for (const id of world.created) {
-      if (!world.cancelled.has(id)) expect(orders.has(id), `order ${id} lost on ${replica.id}`).toBe(true);
+      if (!world.cleanedUp.has(id)) expect(orders.has(id), `order ${id} lost on ${replica.id}`).toBe(true);
     }
     for (const [itemId, orderId] of world.addedItems) {
-      if (world.removedItems.has(itemId) || world.cancelled.has(orderId)) continue;
+      if (world.removedItems.has(itemId) || world.cleanedUp.has(orderId)) continue;
       const items = orders.get(orderId)?.items.map((i) => i.id) ?? [];
       expect(items, `item ${itemId} lost on ${replica.id}`).toContain(itemId);
     }
     for (const order of orders.values()) {
       expect(order.status, `status of ${order.id} on ${replica.id}`).toBe(world.expectedStatus(order.id));
+    }
+    for (const id of world.canceled) {
+      const status = orders.get(id)?.status;
+      if (status) expect(status, `canceled ${id} came back on ${replica.id}`).toBe('canceled');
     }
   }
 }

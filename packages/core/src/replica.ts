@@ -16,6 +16,7 @@ import {
   emptyDoc,
   joinDocs,
   joinOrders,
+  isFinished,
   statusRank,
   viewOrders,
   type DocState,
@@ -86,7 +87,7 @@ export class Replica {
     return this.updateItem(orderId, itemId, item);
   }
 
-  /** Add or overwrite a line item. Counts as an edit to the order, so it survives a concurrent cancel. */
+  /** Add or overwrite a line item. Counts as an edit to the order, so it survives a concurrent cleanup. */
   updateItem(orderId: string, itemId: string, item: LineItem): Delta {
     return this.edit((dot, hlc) => ({
       [orderId]: {
@@ -120,8 +121,22 @@ export class Replica {
     }));
   }
 
-  /** Cancel an order. Edits made elsewhere without seeing this cancel keep the order alive (add wins). */
+  /**
+   * Cancel an order by moving it to the final stage. The order stays in the map,
+   * and since no stage is further than "canceled", no concurrent edit can revive it.
+   */
   cancelOrder(orderId: string): Delta {
+    return this.setStatus(orderId, 'canceled');
+  }
+
+  /**
+   * Remove a picked-up or canceled order from the map to free the screen.
+   * Like any add-wins removal it only covers edits this device has seen, so a
+   * concurrent edit elsewhere brings the order back, still in its finished stage.
+   */
+  removeFinishedOrder(orderId: string): Delta {
+    const status = this.statusOf(orderId);
+    if (!isFinished(status)) throw new Error(`order ${orderId} is ${status}; only finished orders can be removed`);
     const seen = awLiveDots(this.doc.orders[orderId]);
     return this.edit((dot) => ({ [orderId]: { adds: {}, tombs: { [dot]: seen } } }));
   }

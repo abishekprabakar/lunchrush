@@ -10,9 +10,17 @@ import {
 import { compareHlc, type Hlc } from './hlc';
 import { forwardJoin, lwwJoin, type Write } from './register';
 
-/** The stages of an order, in the only direction it can move. */
-export const STATUSES = ['new', 'cooking', 'ready', 'picked_up'] as const;
+/**
+ * The stages of an order, in the only direction it can move. "canceled" is the
+ * last stage, so once any device cancels an order, no other edit can undo it.
+ */
+export const STATUSES = ['new', 'cooking', 'ready', 'picked_up', 'canceled'] as const;
 export type Status = (typeof STATUSES)[number];
+
+/** Finished orders are the only ones that may be cleaned out of the map. */
+export function isFinished(status: Status): boolean {
+  return status === 'picked_up' || status === 'canceled';
+}
 
 /** How far along a stage is: new = 0, cooking = 1, ... */
 export function statusRank(status: Status): number {
@@ -46,6 +54,8 @@ export interface OrderValue {
 /**
  * Everything a replica knows: the orders (an add-wins map keyed by order id)
  * and the causal context listing every edit those orders already include.
+ * Canceling an order is a status change; removing a key from the map is only
+ * used to clean up finished orders.
  */
 export interface DocState {
   orders: AwMap<OrderValue>;

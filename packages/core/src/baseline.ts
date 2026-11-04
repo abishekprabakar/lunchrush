@@ -12,7 +12,6 @@ export interface BaselineOrder {
   info: OrderInfo;
   status: Status;
   items: Record<string, LineItem>;
-  cancelled: boolean;
 }
 
 export interface BaselineDoc {
@@ -31,7 +30,7 @@ export class BaselineReplica {
 
   createOrder(orderId: string, info: OrderInfo): BaselineDoc {
     return this.edit((doc) => {
-      doc.orders[orderId] = { info: { ...info }, status: 'new', items: {}, cancelled: false };
+      doc.orders[orderId] = { info: { ...info }, status: 'new', items: {} };
     });
   }
 
@@ -58,8 +57,13 @@ export class BaselineReplica {
   }
 
   cancelOrder(orderId: string): BaselineDoc {
+    return this.setStatus(orderId, 'canceled');
+  }
+
+  removeFinishedOrder(orderId: string): BaselineDoc {
     return this.edit((doc) => {
-      this.mustFind(doc, orderId).cancelled = true;
+      this.mustFind(doc, orderId);
+      delete doc.orders[orderId];
     });
   }
 
@@ -77,7 +81,6 @@ export class BaselineReplica {
 
   orders(): OrderView[] {
     return Object.entries(this.doc.orders)
-      .filter(([, order]) => !order.cancelled)
       .map(([id, order]) => ({
         id,
         info: { ...order.info },
