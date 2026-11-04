@@ -39,8 +39,8 @@ export interface SyncEngine {
   readonly store: OrderStore;
   summary(): unknown;
   respond(peerSummary: unknown): unknown | undefined;
-  /** Apply a peer's answer. Returns false if it taught us nothing new. */
-  receive(payload: unknown): boolean;
+  /** Apply an answer from peer `from`. Returns false if it taught us nothing new. */
+  receive(payload: unknown, from: string): boolean;
   /** Two nodes with equal fingerprints have converged. */
   fingerprint(): string;
 }

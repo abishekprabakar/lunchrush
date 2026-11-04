@@ -90,7 +90,7 @@ export class SimNode {
       }
     } else {
       this.received.payloadBytes += bytes;
-      if (!this.engine.receive(message.payload)) this.received.redundantBytes += bytes;
+      if (!this.engine.receive(message.payload, from)) this.received.redundantBytes += bytes;
     }
   }
 }

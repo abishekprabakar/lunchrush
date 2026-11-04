@@ -81,7 +81,7 @@ describe('version-vector delta sync', () => {
     const forKitchen = counter.deltaFor(kitchen.versionVector());
 
     const result = driveThru.merge(forKitchen); // delivered to the wrong device
-    expect(result).toEqual({ newEdits: 0, baseCovered: false });
+    expect(result).toEqual({ newEdits: 0, baseCovered: false, staleStatusWrites: [] });
     expect(driveThru.versionVector()).toEqual({});
     expect(driveThru.order('o2')?.status).toBe('ready');
 

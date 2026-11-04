@@ -136,6 +136,23 @@ describe('status is a forward-only register', () => {
     expect(kitchen.state()).toEqual(counter.state());
   });
 
+  it('reports a stale write that arrives after a further stage, once', () => {
+    const { counter, kitchen, tick, syncBoth } = twoDevices();
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    syncBoth();
+    tick();
+    kitchen.setStatus('o1', 'ready');
+    const cooking = counter.setStatus('o1', 'cooking'); // offline, hasn't seen "ready"
+    const result = kitchen.merge(cooking);
+    expect(result.staleStatusWrites).toEqual([
+      { orderId: 'o1', write: cooking.orders.o1.value?.status, winner: kitchen.state().orders.o1.value?.status },
+    ]);
+    expect(result.staleStatusWrites[0].winner.value).toBe('ready');
+    expect(kitchen.merge(cooking).staleStatusWrites).toEqual([]); // a duplicate is not news
+    // normal progress is not reported: the counter simply learns "ready"
+    expect(counter.merge(kitchen.deltaFor(counter.versionVector())).staleStatusWrites).toEqual([]);
+  });
+
   it('refuses to move an order backwards locally', () => {
     const { counter } = twoDevices();
     counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });

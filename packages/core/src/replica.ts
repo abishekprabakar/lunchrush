@@ -1,6 +1,7 @@
 import { awLiveDots, isEmpty, type AwMap } from './awmap';
 import {
   ctxFromDots,
+  ctxIncludes,
   ctxSince,
   ctxSize,
   ctxToVv,
@@ -12,6 +13,7 @@ import {
   type VersionVector,
 } from './causal-context';
 import { HlcClock, type Hlc } from './hlc';
+import type { Write } from './register';
 import {
   docSince,
   emptyDoc,
@@ -19,6 +21,7 @@ import {
   joinOrders,
   canMoveTo,
   isFinished,
+  statusRank,
   viewOrders,
   type DocState,
   type LineItem,
@@ -50,6 +53,20 @@ export interface MergeResult {
   newEdits: number;
   /** False if the receiver lacked the delta's base: it kept the data but did not advance its version vector. */
   baseCovered: boolean;
+  /**
+   * Status writes that were new to this replica but lost, because it already had
+   * the order at a further stage. Data-wise nothing is wrong; this is so a UI can
+   * tell people "the kitchen's 'cooking' tap was ignored: the order is already ready".
+   */
+  staleStatusWrites: StaleStatusWrite[];
+}
+
+export interface StaleStatusWrite {
+  orderId: string;
+  /** The write that arrived and lost. */
+  write: Write<Status>;
+  /** The further-along write this replica keeps instead. */
+  winner: Write<Status>;
 }
 
 export interface ReplicaOptions {
@@ -193,6 +210,10 @@ export class Replica {
   merge(delta: Delta): MergeResult {
     this.clock.receive(delta.clock);
     const before = ctxSize(this.doc.context);
+    const arrivingStatus = Object.entries(delta.orders).flatMap(([orderId, entry]) => {
+      const write = entry.value?.status;
+      return write && !ctxIncludes(this.doc.context, write.dot) ? [{ orderId, write }] : [];
+    });
     const baseCovered = vvCovers(this.versionVector(), delta.since);
     this.doc = {
       orders: joinOrders(this.doc.orders, delta.orders),
@@ -200,7 +221,11 @@ export class Replica {
       // cannot claim the delta's edits as seen. Anti-entropy fills the gap later.
       context: baseCovered ? ctxUnion(this.doc.context, delta.context) : this.doc.context,
     };
-    return { newEdits: ctxSize(this.doc.context) - before, baseCovered };
+    const staleStatusWrites = arrivingStatus.flatMap(({ orderId, write }) => {
+      const winner = this.doc.orders[orderId]?.value?.status;
+      return winner && statusRank(winner.value) > statusRank(write.value) ? [{ orderId, write, winner }] : [];
+    });
+    return { newEdits: ctxSize(this.doc.context) - before, baseCovered, staleStatusWrites };
   }
 
   // ---- Reading
