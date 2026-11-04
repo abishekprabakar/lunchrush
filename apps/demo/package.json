@@ -1,0 +1,23 @@
+{
+  "name": "@lunchrush/demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "lunchrush demo: three restaurant devices syncing orders in the browser, with a cut-internet button, partitions, CRDT versus naive, and a multi-tab BroadcastChannel mode.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@lunchrush/core": "workspace:*",
+    "@lunchrush/sim": "workspace:*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "vite": "^7.3.7"
+  }
+}

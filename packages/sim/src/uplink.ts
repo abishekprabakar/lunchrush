@@ -22,6 +22,11 @@ import type { GossipOptions } from './gossip';
  * uplink (possible with only a direct-neighbour view of the LAN), it costs extra
  * bytes and nothing else, because merging the same edits twice is harmless.
  */
+/** The election rule: a device carries the store's cloud traffic if its id is the lowest among itself and the LAN peers it can see. */
+export function isStoreUplink(id: string, lanPeers: string[]): boolean {
+  return lanPeers.every((peer) => id < peer);
+}
+
 export function singleUplink(cloud: string, intervalMs: number): GossipOptions {
   const recentMs = 3 * intervalMs;
   return {
@@ -30,8 +35,7 @@ export function singleUplink(cloud: string, intervalMs: number): GossipOptions {
         return reachable.filter((peer) => now - (self.lastHeard.get(peer) ?? -Infinity) <= recentMs);
       }
       const lan = reachable.filter((peer) => peer !== cloud);
-      const isUplink = lan.every((peer) => self.id < peer);
-      return isUplink ? reachable : lan;
+      return isStoreUplink(self.id, lan) ? reachable : lan;
     },
     greetAfterMs: recentMs,
   };
