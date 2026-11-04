@@ -413,6 +413,26 @@ other columns show whether they agree on the right thing.
 
 ---
 
+## 8. The demo (`apps/demo`)
+
+The demo is the same simulator, driven by real time instead of jumping from event to event. Every few
+milliseconds the page advances the simulated clock to "now", so gossip messages arrive with realistic
+delays, and cutting a link in the diagram cuts it in the simulated network. Each panel is a separate
+replica. The panels never share memory; they only learn about each other's edits through messages.
+
+Two details are worth knowing:
+
+- **The sync log's stale-write warning comes from the merge.** `Replica.merge` returns
+  `staleStatusWrites`: status writes that were new to this replica but lost, because it already had the
+  order at a further stage. The data was never wrong. The warning just tells people their tap was
+  ignored, which forward-only status otherwise does silently.
+- **Multi-tab mode gives every tab a fresh replica id**, like `kitchen.k3f9`. If a reloaded tab reused
+  plain `kitchen`, it would start counting its edits from 1 again, and its new edit `kitchen:1` would
+  share a name with the old tab's `kitchen:1`. Peers that already had the old one would think they had
+  the new one too, and never ask for it. A dot must name exactly one edit, forever.
+
+---
+
 ## Glossary
 
 - **Replica**: one device's full copy of the data.
