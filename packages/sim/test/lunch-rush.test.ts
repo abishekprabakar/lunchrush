@@ -60,6 +60,15 @@ describe('the lunch-rush outage (full scenario: 10 minutes offline, 200 orders, 
     expect(r.ordersLost).toBeGreaterThan(0);
   });
 
+  it('single uplink cuts internet bytes and redundant answers without losing anything', () => {
+    const before = runLunchRush('crdt-delta', 1, { ...LUNCH_RUSH, singleUplink: false });
+    const after = results['crdt-delta'];
+    expect(LUNCH_RUSH.singleUplink).toBe(true);
+    expect(after.bytesInternet).toBeLessThan(before.bytesInternet / 2);
+    expect(after.redundantBytes / after.payloadBytes).toBeLessThan(before.redundantBytes / before.payloadBytes / 5);
+    expect(after).toMatchObject({ ordersLost: 0, itemsLost: 0, statusLost: 0, identicalAtEnd: true });
+  });
+
   it('is deterministic: the same seed gives the same numbers', () => {
     expect(runLunchRush('crdt-delta', 1)).toEqual(results['crdt-delta']);
   });

@@ -1,6 +1,7 @@
 import { canMoveTo, statusRank, type OrderView, type Status } from '@lunchrush/core';
 import { createEngine, type EngineKind } from './engines';
 import { SimNode, type WireMessage } from './gossip';
+import { singleUplink } from './uplink';
 import { Network, type LinkConfig } from './network';
 import { makeRng } from './rng';
 import { Simulation } from './simulation';
@@ -27,6 +28,8 @@ export interface LunchRushConfig {
   clockSkewMs: Record<string, number>;
   /** When false, the drive-thru tablet and kitchen display can't reach each other and sync through the counter. */
   driveThruSeesKitchen: boolean;
+  /** When true, the store's cloud traffic goes through one device instead of every device (see uplink.ts). */
+  singleUplink: boolean;
 }
 
 export const LUNCH_RUSH: LunchRushConfig = {
@@ -42,6 +45,7 @@ export const LUNCH_RUSH: LunchRushConfig = {
   internet: { latencyMs: 40, jitterMs: 40, loss: 0.01, duplicate: 0.005, bytesPerSecond: 250_000, pipe: 'store-uplink' },
   clockSkewMs: { 'drive-thru': 1_200, counter: -700, kitchen: 300, cloud: 0 },
   driveThruSeesKitchen: false,
+  singleUplink: true,
 };
 
 export interface LunchRushResult {
@@ -93,10 +97,11 @@ export function runLunchRush(engine: EngineKind, seed: number, config: LunchRush
   ]);
 
   // Topology: devices see each other on the LAN; each reaches the cloud over the shared uplink.
+  const gossip = config.singleUplink ? singleUplink(CLOUD, config.gossipIntervalMs) : {};
   const nodes = new Map<string, SimNode>();
   for (const id of [...DEVICES, CLOUD]) {
     const skew = config.clockSkewMs[id] ?? 0;
-    nodes.set(id, new SimNode(id, createEngine(engine, id, () => NOON + sim.now + skew), net));
+    nodes.set(id, new SimNode(id, createEngine(engine, id, () => NOON + sim.now + skew), net, sim, gossip));
   }
   for (const [i, a] of DEVICES.entries()) {
     for (const b of DEVICES.slice(i + 1)) {
@@ -105,7 +110,7 @@ export function runLunchRush(engine: EngineKind, seed: number, config: LunchRush
     }
     net.connect(a, CLOUD, 'internet', config.internet);
   }
-  for (const node of nodes.values()) node.start(sim, config.gossipIntervalMs, phaseRng() * config.gossipIntervalMs);
+  for (const node of nodes.values()) node.start(config.gossipIntervalMs, phaseRng() * config.gossipIntervalMs);
 
   // The staff's work. Each status edit only happens if the device's own screen allows it.
   const created = new Map<string, string[]>(); // orderId -> itemIds
