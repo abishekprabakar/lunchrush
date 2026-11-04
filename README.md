@@ -73,6 +73,7 @@ cloud never downloads the same edits from every device at once.
 | --- | --- |
 | [`packages/core`](packages/core) | Hybrid logical clocks, dots and version vectors, add-wins map, registers, `Replica.deltaFor` / `merge`, and the naive baseline. Example tests plus fast-check property tests. |
 | [`packages/sim`](packages/sim) | A deterministic discrete-event network simulator (latency, jitter, loss, duplicates, bandwidth, partitions), anti-entropy gossip with a single uplink, and the lunch-rush benchmark. |
+| [`packages/node`](packages/node) | Real network mode: one device per process, UDP multicast discovery, WebSocket sync with the same protocol, an optional cloud relay, and an end-to-end outage script. |
 | [`apps/demo`](apps/demo) | The React demo: the simulated store in real time, and the BroadcastChannel multi-tab mode. |
 
 ## Results
@@ -108,10 +109,20 @@ corepack enable     # provides the pinned pnpm version
 pnpm install
 pnpm all            # everything: lint, typecheck, all tests, the benchmark, and the demo build
 pnpm dev            # the demo at http://localhost:5173
+pnpm lan            # real processes: 3 devices and a relay; kills the relay, restarts it, checks convergence
 ```
 
 Or one step at a time: `pnpm check` (lint, typecheck, tests), `pnpm bench` (writes `results.md`),
 `pnpm build` (the demo, into `apps/demo/dist`).
+
+To run devices by hand, each in its own terminal (they find each other on the LAN by multicast):
+
+```sh
+pnpm exec tsx packages/node/src/cli.ts relay --port 8787
+pnpm exec tsx packages/node/src/cli.ts device --name counter --relay ws://127.0.0.1:8787/sync
+pnpm exec tsx packages/node/src/cli.ts device --name kitchen --relay ws://127.0.0.1:8787/sync
+curl -s localhost:<port>/state    # each device prints its port; POST /orders takes an order
+```
 
 ## Limitations
 
@@ -120,9 +131,10 @@ the reasoning behind each design choice.
 
 **What it doesn't do at all**
 
-- **No Bluetooth, peer-to-peer Wi-Fi or real LAN networking.** Devices talk through the in-process
-  simulator, or between browser tabs over BroadcastChannel. A real network mode (UDP multicast
-  discovery and WebSockets between processes) is planned but not built.
+- **No Bluetooth or peer-to-peer Wi-Fi.** Devices talk over a real LAN (UDP multicast discovery and
+  WebSockets, in `packages/node`), through the simulator, or between browser tabs over
+  BroadcastChannel. The real network mode also doesn't use the single uplink yet: every device
+  connects to the relay.
 - **No authentication or encryption.** Any peer can join, read everything and write anything, and
   messages are plain JSON.
 - **No tombstone cleanup.** Removed items and cleaned-up orders leave tombstones forever, and every
@@ -183,6 +195,12 @@ packages/sim/src
   workload.ts        the staff's orders and status edits, generated from a seed
   lunch-rush.ts      the outage scenario and its scoring
   report.ts, bench.ts  results.md and the summaries above
+
+packages/node/src
+  lan-node.ts        one process: replica, WebSocket sync, peers, HTTP API
+  discovery.ts       UDP multicast announcements on the local network
+  cli.ts             run a device or the relay
+  outage.ts          the end-to-end check behind `pnpm lan`
 
 apps/demo/src
   world.ts           the simulated store, driven in real time, with the sync log

@@ -27,6 +27,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # Real processes on a real network: three devices and a relay, which is killed and restarted.
+      - run: pnpm lan
 
   benchmark:
     name: Benchmark numbers match the docs

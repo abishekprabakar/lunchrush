@@ -433,6 +433,30 @@ Two details are worth knowing:
 
 ---
 
+## 9. Real network mode (`packages/node`)
+
+The last step takes the same replica off the simulator and onto a real network: one device per
+process, talking over WebSockets.
+
+- **Finding each other.** Every second, each device sends a small UDP multicast message to the local
+  network: "I'm `counter.k3f9`, syncing on port 8801". Every device listens on the same multicast
+  group, so a new device is found within a second with no configuration and no server. To avoid two
+  connections between the same pair, only the device with the lower id dials.
+- **Syncing.** Exactly the same anti-entropy as the simulator: every half second each node sends its
+  version vector to each connected peer, and answers a peer's version vector with the edits that peer
+  is missing. A connection also syncs immediately when it opens.
+- **The cloud relay is just another node.** Devices dial it if it's reachable and keep retrying if it
+  isn't. Because devices are also connected to each other directly, killing the relay changes nothing
+  in the store. When it comes back empty, it catches up from the devices like any new peer.
+- **Fresh ids per process.** A restarted process gets a new replica id, for the same reason as the
+  browser tabs in section 8: a dot must name exactly one edit, forever.
+
+`pnpm lan` runs it end to end with real processes: start a relay and three devices, take orders,
+kill the relay, keep working, restart the relay, and check that every node ends up with every order,
+no duplicates, and identical state.
+
+---
+
 ## Glossary
 
 - **Replica**: one device's full copy of the data.
