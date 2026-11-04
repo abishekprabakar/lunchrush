@@ -5,3 +5,4 @@ export * from './awmap';
 export * from './order-doc';
 export * from './replica';
 export * from './baseline';
+export * from './bytes';

@@ -20,6 +20,16 @@ export interface BaselineDoc {
   savedBy: string;
 }
 
+/** Which save of the document this is: later `savedAt` wins, `savedBy` breaks ties. */
+export interface BaselineVersion {
+  savedAt: number;
+  savedBy: string;
+}
+
+export function isNewerVersion(a: BaselineVersion, b: BaselineVersion): boolean {
+  return a.savedAt > b.savedAt || (a.savedAt === b.savedAt && a.savedBy > b.savedBy);
+}
+
 export class BaselineReplica {
   private doc: BaselineDoc = { orders: {}, savedAt: 0, savedBy: '' };
 
@@ -73,10 +83,13 @@ export class BaselineReplica {
 
   /** Whole-document last-write-wins: keep whichever copy was saved later. Returns true if ours was replaced. */
   merge(remote: BaselineDoc): boolean {
-    const remoteIsNewer =
-      remote.savedAt > this.doc.savedAt || (remote.savedAt === this.doc.savedAt && remote.savedBy > this.doc.savedBy);
+    const remoteIsNewer = isNewerVersion(remote, this.doc);
     if (remoteIsNewer) this.doc = structuredClone(remote);
     return remoteIsNewer;
+  }
+
+  version(): BaselineVersion {
+    return { savedAt: this.doc.savedAt, savedBy: this.doc.savedBy };
   }
 
   orders(): OrderView[] {

@@ -1,6 +1,7 @@
 import { awLiveDots, isEmpty, type AwMap } from './awmap';
 import {
   ctxFromDots,
+  ctxSince,
   ctxSize,
   ctxToVv,
   ctxUnion,
@@ -172,6 +173,11 @@ export class Replica {
     return ctxToVv(this.doc.context);
   }
 
+  /** Cheap check before cutting a delta: do we know of any edit the peer's version vector lacks? */
+  hasEditsMissingFrom(peerVv: VersionVector): boolean {
+    return !isEmpty(ctxSince(this.doc.context, peerVv));
+  }
+
   /** Exactly what a peer with version vector `peerVv` is missing. */
   deltaFor(peerVv: VersionVector): Delta {
     return { from: this.id, since: { ...peerVv }, clock: this.clock.current(), ...docSince(this.doc, peerVv) };
@@ -227,9 +233,4 @@ export class Replica {
 
 export function isEmptyDelta(delta: Delta): boolean {
   return isEmpty(delta.orders) && isEmpty(delta.context);
-}
-
-/** Size of a message on the wire, as UTF-8 JSON. */
-export function byteSize(message: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(message)).length;
 }

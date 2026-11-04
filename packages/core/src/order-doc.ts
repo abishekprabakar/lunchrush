@@ -97,6 +97,7 @@ export function joinDocs(a: DocState, b: DocState): DocState {
  * every piece whose dot the peer has not seen, plus the matching slice of the context.
  */
 export function docSince(doc: DocState, vv: VersionVector): DocState {
+  if (isEmpty(vv)) return { orders: doc.orders, context: doc.context }; // a peer with nothing gets everything
   const keep = (dot: Dot) => !vvIncludes(vv, dot);
   const keepWrite = <T>(reg: Write<T> | undefined) => (reg && keep(reg.dot) ? reg : undefined);
   const filterValue = (v: OrderValue): OrderValue | undefined => {

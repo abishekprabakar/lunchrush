@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { byteSize, isEmptyDelta, Replica } from '../src';
+import fc from 'fast-check';
+import { byteSize, isEmptyDelta, Replica, utf8Length } from '../src';
 
 function busyCounter(orders: number) {
   const counter = new Replica('counter', { now: () => 1_000 });
@@ -86,5 +87,26 @@ describe('version-vector delta sync', () => {
 
     driveThru.merge(counter.deltaFor(driveThru.versionVector()));
     expect(driveThru.state()).toEqual(counter.state());
+  });
+});
+
+describe('message sizes', () => {
+  it('counts UTF-8 bytes exactly like TextEncoder', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'grapheme' }), (text) => {
+        expect(utf8Length(text)).toBe(new TextEncoder().encode(text).length);
+      }),
+    );
+    for (const odd of ['\ud800', '\ud800x', 'x\udc00', '\udc00\ud800', '😀']) {
+      expect(utf8Length(odd)).toBe(new TextEncoder().encode(odd).length);
+    }
+  });
+
+  it('knows cheaply whether a peer is missing anything', () => {
+    const counter = busyCounter(2);
+    const kitchen = new Replica('kitchen');
+    expect(counter.hasEditsMissingFrom(kitchen.versionVector())).toBe(true);
+    kitchen.merge(counter.fullState());
+    expect(counter.hasEditsMissingFrom(kitchen.versionVector())).toBe(false);
   });
 });
