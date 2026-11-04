@@ -74,6 +74,7 @@ export class Replica {
   // ---- Local edits. Each returns a delta holding just that edit, ready to broadcast.
 
   createOrder(orderId: string, info: OrderInfo): Delta {
+    this.assertEditable(orderId);
     return this.edit((dot, hlc) => ({
       [orderId]: {
         adds: { [dot]: true },
@@ -89,6 +90,7 @@ export class Replica {
 
   /** Add or overwrite a line item. Counts as an edit to the order, so it survives a concurrent cleanup. */
   updateItem(orderId: string, itemId: string, item: LineItem): Delta {
+    this.assertEditable(orderId);
     return this.edit((dot, hlc) => ({
       [orderId]: {
         adds: { [dot]: true },
@@ -100,6 +102,7 @@ export class Replica {
 
   /** Remove a line item. Only removes the adds this device has seen; a concurrent add elsewhere survives. */
   removeItem(orderId: string, itemId: string): Delta {
+    this.assertEditable(orderId);
     const seen = awLiveDots(this.doc.orders[orderId]?.value?.items[itemId]);
     return this.edit((dot) => ({
       [orderId]: { adds: {}, tombs: {}, value: { items: { [itemId]: { adds: {}, tombs: { [dot]: seen } } } } },
@@ -112,6 +115,7 @@ export class Replica {
    * certainly a bug in the caller.
    */
   setStatus(orderId: string, status: Status): Delta {
+    this.assertEditable(orderId);
     const current = this.statusOf(orderId);
     if (statusRank(status) <= statusRank(current)) {
       throw new Error(`order ${orderId} is already ${current}; status only moves forward`);
@@ -122,8 +126,9 @@ export class Replica {
   }
 
   /**
-   * Cancel an order by moving it to the final stage. The order stays in the map,
-   * and since no stage is further than "canceled", no concurrent edit can revive it.
+   * Cancel an order. It stays in the map, and since every active stage is
+   * behind "canceled", no concurrent edit can bring it back. Only a concurrent
+   * pick-up is further along.
    */
   cancelOrder(orderId: string): Delta {
     return this.setStatus(orderId, 'canceled');
@@ -144,6 +149,16 @@ export class Replica {
   /** The local stage of an order, even one removed from the map. */
   statusOf(orderId: string): Status {
     return this.doc.orders[orderId]?.value?.status?.value ?? 'new';
+  }
+
+  /**
+   * Once this device sees an order as picked up or canceled, it refuses to edit it.
+   * This is a local rule only: the merge is unchanged, so edits made elsewhere
+   * before that device saw the order finish still merge normally.
+   */
+  private assertEditable(orderId: string): void {
+    const status = this.statusOf(orderId);
+    if (isFinished(status)) throw new Error(`order ${orderId} is ${status}; finished orders can't be edited`);
   }
 
   /** A unique id for a new order or item, e.g. "order-kitchen-3". */

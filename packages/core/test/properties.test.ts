@@ -34,8 +34,9 @@ function expectNothingLost(world: World): void {
       expect(order.status, `status of ${order.id} on ${replica.id}`).toBe(world.expectedStatus(order.id));
     }
     for (const id of world.canceled) {
+      // a canceled order never returns to an active stage; only a concurrent pick-up can beat it
       const status = orders.get(id)?.status;
-      if (status) expect(status, `canceled ${id} came back on ${replica.id}`).toBe('canceled');
+      if (status) expect(['canceled', 'picked_up'], `canceled ${id} came back on ${replica.id}`).toContain(status);
     }
   }
 }

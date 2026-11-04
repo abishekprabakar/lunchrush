@@ -41,12 +41,13 @@ describe('orders as an add-wins map', () => {
   it('cleanup is add-wins: a concurrent edit brings a finished order back, still finished', () => {
     const { counter, kitchen, tick, syncBoth } = twoDevices();
     counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
-    counter.setStatus('o1', 'picked_up');
+    counter.setStatus('o1', 'ready');
     syncBoth();
     tick();
+    counter.setStatus('o1', 'picked_up');
     counter.removeFinishedOrder('o1');
     tick();
-    kitchen.addItem('o1', 'napkins', { name: 'napkins', qty: 1 }); // hadn't seen the cleanup
+    kitchen.addItem('o1', 'napkins', { name: 'napkins', qty: 1 }); // still sees "ready"
     syncBoth();
     expect(counter.order('o1')?.status).toBe('picked_up');
     // cleaning up again after seeing that edit removes it for good
@@ -159,22 +160,52 @@ describe('cancel is the final stage', () => {
     syncBoth();
     expect(counter.order('o1')?.status).toBe('canceled');
     expect(kitchen.order('o1')?.status).toBe('canceled');
+    expect(counter.order('o1')?.items.map((i) => i.name)).toEqual(['cookie']); // the edit merged; it just doesn't revive the order
     expect(kitchen.state()).toEqual(counter.state());
-    expect(() => kitchen.setStatus('o1', 'picked_up')).toThrow(/already canceled/);
   });
 
-  it('cancel beats a concurrent pick-up', () => {
+  it('a concurrent pick-up beats a cancel, because the customer has the food', () => {
     const { counter, kitchen, tick, syncBoth } = twoDevices();
     counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
     counter.setStatus('o1', 'ready');
     syncBoth();
     tick();
+    kitchen.setStatus('o1', 'picked_up');
+    tick();
+    counter.cancelOrder('o1'); // later, but an earlier stage
+    syncBoth();
+    expect(counter.order('o1')?.status).toBe('picked_up');
+    expect(kitchen.order('o1')?.status).toBe('picked_up');
+  });
+});
+
+describe('finished orders are read-only on a device that sees them as finished', () => {
+  it.each(['canceled', 'picked_up'] as const)('refuses every edit to a %s order', (finish) => {
+    const { counter } = twoDevices();
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    counter.addItem('o1', 'fries', { name: 'fries', qty: 1 });
+    counter.setStatus('o1', finish);
+    const refused = /finished orders can't be edited/;
+    expect(() => counter.addItem('o1', 'cookie', { name: 'cookie', qty: 1 })).toThrow(refused);
+    expect(() => counter.updateItem('o1', 'fries', { name: 'fries', qty: 2 })).toThrow(refused);
+    expect(() => counter.removeItem('o1', 'fries')).toThrow(refused);
+    expect(() => counter.setStatus('o1', 'picked_up')).toThrow(refused);
+    expect(() => counter.cancelOrder('o1')).toThrow(refused);
+    expect(() => counter.createOrder('o1', { customer: 'Sam', channel: 'counter' })).toThrow(refused);
+    expect(() => counter.removeFinishedOrder('o1')).not.toThrow(); // cleanup is the one thing allowed
+  });
+
+  it('still merges edits made elsewhere before that device saw the order finish', () => {
+    const { counter, kitchen, tick, syncBoth } = twoDevices();
+    counter.createOrder('o1', { customer: 'Sam', channel: 'counter' });
+    syncBoth();
+    tick();
     counter.cancelOrder('o1');
     tick();
-    kitchen.setStatus('o1', 'picked_up');
-    syncBoth();
+    kitchen.addItem('o1', 'cookie', { name: 'cookie', qty: 1 }); // kitchen still sees "new"
+    counter.merge(kitchen.deltaFor(counter.versionVector()));
+    expect(counter.order('o1')?.items.map((i) => i.name)).toEqual(['cookie']);
     expect(counter.order('o1')?.status).toBe('canceled');
-    expect(kitchen.order('o1')?.status).toBe('canceled');
   });
 });
 

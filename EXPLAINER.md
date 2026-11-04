@@ -149,8 +149,12 @@ Removed keys are never deleted from memory; their tombstones stay forever. That 
 An order moves through stages in one direction:
 
 ```
-new  ->  cooking  ->  ready  ->  picked_up  ->  canceled
+new  ->  cooking  ->  ready  ->  canceled  ->  picked_up
 ```
+
+"canceled" comes before "picked_up" on purpose: the system should reflect what physically happened.
+If the customer drove off with the food while someone else hit cancel, the pick-up wins, and any
+refund is handled by a separate process.
 
 With LWW, the newest *timestamp* wins. That goes wrong in a lunch rush. The kitchen marks an order
 "ready". The counter, offline and still seeing "new", taps "cooking" a second later. When they sync,
@@ -174,8 +178,8 @@ Two things make this work, and both are worth noticing:
 
 - **Every pair of writes must be comparable.** The stages form a single line, and two different
   writes never share a timestamp, so there is always exactly one biggest write. If we added a stage
-  that is neither before nor after another, say "refunded" next to "picked_up", "keep the furthest"
-  would have no answer for those two. We would need a tiebreak rule or a different design.
+  that is neither before nor after another, say "refunded" alongside "picked_up", "keep the
+  furthest" would have no answer for those two. We would need a tiebreak rule or a different design.
 - **A bonus guarantee: the screen never goes backwards.** With LWW, a device can show "ready", then
   receive a stale "cooking" that has a later timestamp and switch back to "cooking". With
   forward-only, a device's register only ever moves up, so its display only ever moves forward. The
@@ -184,15 +188,33 @@ Two things make this work, and both are worth noticing:
 `setStatus` also refuses a backwards move on the local device (it throws), because the merge would
 ignore that write anyway, so it is almost certainly a bug in the caller.
 
+A write from another device can still lose. If the counter, offline, taps "cooking" after the kitchen
+has already marked the order "ready", the counter's write is valid where it was made, and then quietly
+loses at the merge. Nothing is wrong with the data, but the person who tapped it gets no feedback.
+Milestone 4's sync log will show a message whenever a write loses to a further stage.
+
 ### Cancel is a stage, not a removal
 
 At first, canceling removed the order from the add-wins map. But add-wins means a concurrent edit
 beats the removal, so if the counter canceled an order while the kitchen, offline, marked it
 "ready", the order came back to life after the sync.
 
-Now "canceled" is simply the **last stage**. Nothing is further along, so once any device cancels an
-order, every merge keeps "canceled", whatever else happened concurrently. A canceled order stays in the
-map (it still shows up, marked canceled) until someone cleans it up.
+Now "canceled" is a **stage**, and every active stage (new, cooking, ready) is behind it. So once any
+device cancels an order, no concurrent edit can return it to the grill. The only thing further along is
+"picked_up": a concurrent pick-up beats a cancel, because the customer has the food. A canceled order
+stays in the map (it still shows up, marked canceled) until someone cleans it up.
+
+### Finished orders are read-only, locally
+
+Once a device sees an order as canceled or picked up, it refuses any new edit to it: no items, no
+status changes, no re-creating it. Only cleanup is allowed. This is a rule in the device's edit
+methods (`assertEditable` in `replica.ts`), **not** in the merge. Edits made on another device
+*before* that device heard about the finish are still merged normally (`orders.test.ts`, "still merges
+edits made elsewhere").
+
+Why not put the rule in the merge too? The merge has to accept everything to stay a join: if a device
+rejected an incoming edit because of *its* current state, two devices with different histories would
+make different choices and stop converging. Local rules may depend on local state; the merge may not.
 
 Cleanup is still an add-wins removal, so a concurrent edit to a finished order can bring it back. But
 it comes back *still finished*, because its status register comes back with it. The worst case is a
@@ -204,12 +226,16 @@ finished order reappearing in the "done" list until it is cleaned up again (`ord
 - **No undo.** If someone taps "ready" by mistake, nothing can move it back to "cooking". A real
   system would need an explicit correction, such as a separate "recall" edit that the kitchen display
   also takes into account.
-- **Cancel beats everything, including "picked up".** If one device marks an order picked up while
-  another cancels it, the result is "canceled". That is a business rule encoded in the stage order,
-  and the merge just enforces it. If "picked up" should win instead, swap the last two stages.
+- **The stage order is a business rule.** Pick-up beats cancel because it is what physically
+  happened. The merge just enforces whichever order we choose.
+- **A device that shows "canceled" can't record a pick-up.** The local read-only rule blocks it. A
+  pick-up only wins if it was recorded on a device that hadn't yet heard about the cancel.
 - **Edits that race a cancel are kept, but don't matter.** Items added concurrently with a cancel
   are still merged into the order. The order just shows as canceled.
-- **Canceled orders take space until cleanup.** They are no longer removed automatically.
+- **Stale writes lose silently** (until Milestone 4's sync log reports them).
+- **Only one line of stages.** A stage that is neither before nor after another needs a new design.
+- **Cleanup is add-wins**, so a cleaned-up order can reappear (still finished).
+- **Finished orders take space until cleanup**, and tombstones are never deleted.
 
 ### The order document (`order-doc.ts`)
 
@@ -218,7 +244,7 @@ Putting it together, the whole store is:
 ```
 orders: add-wins map, order id ->
   info:   LWW register           { customer, channel }
-  status: forward-only register  new -> cooking -> ready -> picked_up -> canceled
+  status: forward-only register  new -> cooking -> ready -> canceled -> picked_up
   items:  add-wins map, item id -> LWW register { name, qty }
 context: which edits this state already includes
 ```

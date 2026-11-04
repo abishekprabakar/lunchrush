@@ -16,7 +16,7 @@ safe, how version vectors decide what to send, and why delta sync saves bandwidt
 - [x] Milestone 1: core sync engine (`packages/core`)
 - [ ] Milestone 2: network simulator and lunch-rush outage benchmark
 - [ ] Milestone 3: real LAN mode (UDP multicast discovery, WebSockets, optional cloud relay)
-- [ ] Milestone 4: demo UI
+- [ ] Milestone 4: demo UI (its sync log will report status writes that lose to a further stage)
 - [ ] Milestone 5: polish and CI
 
 ## Run it
@@ -28,6 +28,18 @@ corepack enable     # provides the pinned pnpm version
 pnpm install
 pnpm check          # lint + typecheck + all tests
 ```
+
+## Known limitations
+
+These are deliberate simplifications. [EXPLAINER.md](EXPLAINER.md) explains each one.
+
+- **No undo for status.** Status only moves forward (new, cooking, ready, canceled, picked up). A
+  mistaken "ready" can't go back to "cooking" without a separate correction mechanism.
+- **Stages must form a single line.** The forward-only merge needs every pair of stages to be ordered.
+  Adding a stage alongside another (for example "refunded" next to "picked up") needs a new design.
+- **Cleanup is add-wins.** Removing a finished order from the map only covers edits the device has
+  seen, so a concurrent edit can bring a cleaned-up order back. It comes back still finished.
+- **Memory grows.** Finished orders stay until cleaned up, and tombstones are never deleted.
 
 ## Layout
 

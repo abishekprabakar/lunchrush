@@ -147,6 +147,8 @@ export class World {
     const known = Object.keys(r.state().orders); // includes cleaned-up orders, so edits can race a cleanup
     if (known.length === 0) return undefined;
     const orderId = known[op.o % known.length];
+    // Devices refuse edits to orders they see as finished; only cleanup is allowed.
+    if (op.k !== 'cleanup' && isFinished(r.statusOf(orderId))) return undefined;
     switch (op.k) {
       case 'add': {
         const itemId = r.newId('item');
@@ -170,7 +172,6 @@ export class World {
         return delta;
       }
       case 'cancel': {
-        if (r.statusOf(orderId) === 'canceled') return undefined;
         this.canceled.add(orderId);
         const delta = r.cancelOrder(orderId);
         this.recordStatus(orderId, delta);

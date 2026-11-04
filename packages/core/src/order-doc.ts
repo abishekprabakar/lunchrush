@@ -11,10 +11,13 @@ import { compareHlc, type Hlc } from './hlc';
 import { forwardJoin, lwwJoin, type Write } from './register';
 
 /**
- * The stages of an order, in the only direction it can move. "canceled" is the
- * last stage, so once any device cancels an order, no other edit can undo it.
+ * The stages of an order, in the only direction it can move. Once any device
+ * cancels an order it can never return to an active stage. "picked_up" comes
+ * last because the system should reflect what physically happened: if the
+ * customer took the food while someone else canceled, the pick-up wins and any
+ * refund is handled separately.
  */
-export const STATUSES = ['new', 'cooking', 'ready', 'picked_up', 'canceled'] as const;
+export const STATUSES = ['new', 'cooking', 'ready', 'canceled', 'picked_up'] as const;
 export type Status = (typeof STATUSES)[number];
 
 /** Finished orders are the only ones that may be cleaned out of the map. */
