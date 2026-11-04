@@ -16,6 +16,7 @@
     "typecheck": "tsc -p .",
     "check": "eslint . && tsc -p . && vitest run",
     "bench": "tsx packages/sim/src/bench.ts",
+    "lan": "tsx packages/node/src/outage.ts",
     "all": "pnpm check && pnpm bench && pnpm build"
   },
   "devDependencies": {
