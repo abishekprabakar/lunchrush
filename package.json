@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "typecheck": "tsc -p .",
-    "check": "eslint . && tsc -p . && vitest run"
+    "check": "eslint . && tsc -p . && vitest run",
+    "bench": "tsx packages/sim/src/bench.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
