@@ -37,11 +37,13 @@ Measured by `pnpm bench` over 5 seeded runs of the lunch-rush outage (medians; f
 
 | Engine | Orders lost | Status edits lost | Converged after reconnect | Total bytes | Internet bytes |
 | --- | --: | --: | --: | --: | --: |
-| CRDT, delta sync | 0 | 0 | 1.28 s | 1.25 MB | 0.56 MB |
-| CRDT, full-state sync | 0 | 0 | 1.37 s | 48.99 MB | 1.21 MB |
-| Naive last-write-wins | 41 | 19 | 0.82 s | 8.73 MB | 0.28 MB |
+| CRDT, delta sync | 0 | 0 | 1.29 s | 0.89 MB | 0.19 MB |
+| CRDT, full-state sync | 0 | 0 | 1.35 s | 48.71 MB | 0.40 MB |
+| Naive last-write-wins | 37 | 20 | 0.85 s | 8.73 MB | 0.10 MB |
 
-Delta sync sent 39.3x fewer bytes than full-state sync in total, but only 2.1x fewer over the internet. 35% of the bytes in delta-sync answers taught the receiver nothing new.
+Delta sync sent 54.9x fewer bytes than full-state sync in total, but only 2.1x fewer over the internet. 2% of the bytes in delta-sync answers taught the receiver nothing new.
+
+For delta sync, the single uplink cut internet bytes from 0.56 MB to 0.19 MB (67% less) and redundant answers from 35% to 2%, while time to converge after reconnect went from 1.28 s to 1.29 s (medians).
 <!-- /bench:summary -->
 
 ## Known limitations
@@ -55,6 +57,14 @@ These are deliberate simplifications. [EXPLAINER.md](EXPLAINER.md) explains each
 - **Cleanup is add-wins.** Removing a finished order from the map only covers edits the device has
   seen, so a concurrent edit can bring a cleaned-up order back. It comes back still finished.
 - **Memory grows.** Finished orders stay until cleaned up, and tombstones are never deleted.
+- **The uplink is chosen by id, not by who can reach the cloud.** In the simulation every device
+  shares one store connection, so this doesn't matter. With separate connections (say, one tablet on
+  cellular), a store whose uplink device lost its own internet would stop syncing with the cloud. The
+  choice also only looks at direct LAN neighbours, so an unusual layout can pick two uplinks. That
+  costs extra bytes, never wrong data.
+- **Requests in flight aren't tracked.** If an answer takes longer than one gossip interval to arrive,
+  the node asks again and receives the same edits twice. Harmless for correctness, wasteful on long
+  outages over slow links.
 
 ## Layout
 

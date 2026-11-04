@@ -324,11 +324,13 @@ Measured by `pnpm bench` over 5 seeded runs of the lunch-rush outage (medians; f
 
 | Engine | Orders lost | Status edits lost | Converged after reconnect | Total bytes | Internet bytes |
 | --- | --: | --: | --: | --: | --: |
-| CRDT, delta sync | 0 | 0 | 1.28 s | 1.25 MB | 0.56 MB |
-| CRDT, full-state sync | 0 | 0 | 1.37 s | 48.99 MB | 1.21 MB |
-| Naive last-write-wins | 41 | 19 | 0.82 s | 8.73 MB | 0.28 MB |
+| CRDT, delta sync | 0 | 0 | 1.29 s | 0.89 MB | 0.19 MB |
+| CRDT, full-state sync | 0 | 0 | 1.35 s | 48.71 MB | 0.40 MB |
+| Naive last-write-wins | 37 | 20 | 0.85 s | 8.73 MB | 0.10 MB |
 
-Delta sync sent 39.3x fewer bytes than full-state sync in total, but only 2.1x fewer over the internet. 35% of the bytes in delta-sync answers taught the receiver nothing new.
+Delta sync sent 54.9x fewer bytes than full-state sync in total, but only 2.1x fewer over the internet. 2% of the bytes in delta-sync answers taught the receiver nothing new.
+
+For delta sync, the single uplink cut internet bytes from 0.56 MB to 0.19 MB (67% less) and redundant answers from 35% to 2%, while time to converge after reconnect went from 1.28 s to 1.29 s (medians).
 <!-- /bench:summary -->
 
 Three things stand out, and they hold for every seed in `results.md`:
@@ -339,10 +341,27 @@ Three things stand out, and they hold for every seed in `results.md`:
 2. **Over the internet, the gap is much smaller.** After ten minutes offline, the cloud really is
    missing most of the data, and any protocol has to send it. Delta sync can only skip what the
    cloud already had, and after an outage this long that is not much.
-3. **Delta sync still wastes some bytes.** Right after reconnecting, the cloud sends its version
-   vector to all three devices at the same moment, and each one answers with the same missing
-   edits. Most of the later answers repeat what the first one delivered. A fix would be to ask one
-   peer at a time when far behind, or to remember which edits are already on their way.
+3. **Asking everyone at once wasted bytes, so the store now uses a single uplink** (`uplink.ts`).
+   In the first version every device synced with the cloud on its own. Right after the reconnect,
+   the cloud asked all three devices for what it had missed, and all three answered with the same
+   edits. Now one device is the store's **uplink**: the one with the lowest id among those it can see
+   on the LAN (the counter). Only it syncs with the cloud. The other devices' edits reach it over the
+   LAN, with the same multihop relaying as before. If it drops off the LAN, the next lowest takes over
+   on its next round. The cloud only gossips with devices that contacted it recently. When a device
+   comes back after a silence, the cloud greets it with its own version vector right away, so catching
+   up doesn't wait an extra round. `results.md` has the before-and-after table.
+
+   Three details matter:
+
+   - **Correctness never depends on the uplink.** If two devices both think they are the uplink, the
+     cloud gets some edits twice, and merging twice is harmless. The rule only saves bytes.
+   - **The greeting created a new race.** The cloud's greeting and its regular gossip round could fire
+     a few milliseconds apart, and the counter answered both with the same delta. Now a node never
+     asks the same peer twice within half a gossip interval.
+   - **It only removes duplicates that happen at the same time, not repeats over time.** If an answer
+     takes longer than one gossip interval to arrive (a much longer outage on a slow uplink), the
+     cloud asks again before the first answer lands, and gets the same edits twice. Fixing that needs
+     each node to remember which of its requests are still in flight.
 
 ---
 
@@ -370,10 +389,11 @@ so a given seed always gives exactly the same run, byte for byte.
 Every message is turned into JSON on send and parsed on arrival. That is how bytes are counted, and
 it guarantees the receiver gets its own copy, never a shared object.
 
-**Anti-entropy gossip** (`gossip.ts`): every second, each node sends its version vector to every node
+**Anti-entropy gossip** (`gossip.ts`): every second, each node sends its version vector to the nodes
 it can currently reach. A peer that has edits the node is missing answers with exactly those. Every
 node also serves what it learned from others, so in the scenario, where the drive-thru tablet and the
-kitchen display can't reach each other, their edits relay through the counter. That's multihop.
+kitchen display can't reach each other, their edits relay through the counter. That's multihop. The
+same relaying lets the store reach the cloud through a single uplink device (section 6).
 
 **The scenario** (`lunch-rush.ts`): three devices and a cloud node. After a one-minute online warm-up,
 the internet goes down for ten minutes. Staff keep taking orders and moving them through the

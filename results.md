@@ -11,7 +11,8 @@ this file byte for byte.
 - The internet (every device-to-cloud link) goes down for 10 min: 200 orders and 100 planned status edits happen during the outage.
 - The internet comes back, then the run continues for 1 min with no new edits.
 - The drive-thru tablet and the kitchen display cannot reach each other directly, so their edits relay through the counter (multihop).
-- Every node gossips every 1000 ms with each node it can reach.
+- Every node gossips every 1000 ms with the nodes it can reach.
+- Single uplink: only the device with the lowest id among those it can see on the LAN (here the counter) syncs with the cloud, and the others reach the cloud through it. The cloud only gossips with devices that contacted it recently, and greets a device that comes back after a silence (see `uplink.ts`).
 - LAN links: 5 ms latency plus up to 10 ms jitter, 2% loss, 1% duplicated, 2500 KB/s.
 - Internet links: 40 ms latency plus up to 40 ms jitter, 1% loss, 0.5% duplicated, 250 KB/s, shared by the whole store.
 - Device clock skew: drive-thru +1200 ms, counter -700 ms, kitchen +300 ms, cloud +0 ms.
@@ -23,11 +24,26 @@ Median across 5 seeds, with the range in parentheses when the runs differ.
 
 | Engine | Orders lost | Items lost | Status edits lost | Duplicates | Converged after reconnect | LAN bytes | Internet bytes | Total bytes | Redundant answers |
 | --- | --: | --: | --: | --: | --: | --: | --: | --: | --: |
-| CRDT, delta sync | 0 | 0 | 0 | 0 | 1.28 s (0.87 s–1.43 s) | 0.70 MB (0.69 MB–0.70 MB) | 0.56 MB (0.55 MB–0.56 MB) | 1.25 MB (1.25 MB–1.26 MB) | 35% (34%–35%) |
-| CRDT, full-state sync | 0 | 0 | 0 | 0 | 1.37 s (0.92 s–1.48 s) | 47.78 MB (47.19 MB–49.82 MB) | 1.21 MB (1.11 MB–1.22 MB) | 48.99 MB (48.30 MB–50.97 MB) | 3% (3%–4%) |
-| Naive last-write-wins | 41 (35–51) | 0 | 19 (10–25) | 0 | 0.82 s (0.41 s–0.95 s) | 8.44 MB (7.60 MB–9.09 MB) | 0.28 MB (0.26 MB–0.29 MB) | 8.73 MB (7.86 MB–9.36 MB) | 7% (6%–8%) |
+| CRDT, delta sync | 0 | 0 | 0 | 0 | 1.29 s (0.95 s–1.53 s) | 0.70 MB (0.70 MB–0.71 MB) | 0.19 MB (0.19 MB–0.19 MB) | 0.89 MB (0.88 MB–0.89 MB) | 2% (1%–2%) |
+| CRDT, full-state sync | 0 | 0 | 0 | 0 | 1.35 s (1.01 s–1.59 s) | 48.33 MB (46.20 MB–50.30 MB) | 0.40 MB (0.33 MB–0.42 MB) | 48.71 MB (46.60 MB–50.63 MB) | 2% (1%–3%) |
+| Naive last-write-wins | 37 (34–50) | 0 | 20 (9–26) | 0 | 0.85 s (0.50 s–1.10 s) | 8.63 MB (7.81 MB–8.99 MB) | 0.10 MB (0.09 MB–0.10 MB) | 8.73 MB (7.90 MB–9.08 MB) | 5% (4%–6%) |
 
-Over all 5 runs, delta sync sent **39.3x fewer bytes** than full-state sync, with the same merge and the same outcome.
+Over all 5 runs, delta sync sent **54.9x fewer bytes** than full-state sync, with the same merge and the same outcome.
+
+## Single uplink: before and after
+
+**Before**, every device synced with the cloud on its own, so right after the reconnect the cloud asked all three devices for what it missed and each answered with the same edits. **After**, the store's cloud traffic goes through one device. Same seeds and same workloads; only the gossip rule differs. Medians across seeds, ranges in parentheses.
+
+| Engine | Cloud sync | Orders lost | Converged after reconnect | Internet bytes | Total bytes | Redundant answers |
+| --- | --- | --: | --: | --: | --: | --: |
+| CRDT, delta sync | every device | 0 | 1.28 s (0.87 s–1.43 s) | 0.56 MB (0.55 MB–0.56 MB) | 1.25 MB (1.25 MB–1.26 MB) | 35% (34%–35%) |
+| CRDT, delta sync | single uplink | 0 | 1.29 s (0.95 s–1.53 s) | 0.19 MB (0.19 MB–0.19 MB) | 0.89 MB (0.88 MB–0.89 MB) | 2% (1%–2%) |
+| CRDT, full-state sync | every device | 0 | 1.37 s (0.92 s–1.48 s) | 1.21 MB (1.11 MB–1.22 MB) | 48.99 MB (48.30 MB–50.97 MB) | 3% (3%–4%) |
+| CRDT, full-state sync | single uplink | 0 | 1.35 s (1.01 s–1.59 s) | 0.40 MB (0.33 MB–0.42 MB) | 48.71 MB (46.60 MB–50.63 MB) | 2% (1%–3%) |
+| Naive last-write-wins | every device | 41 (35–51) | 0.82 s (0.41 s–0.95 s) | 0.28 MB (0.26 MB–0.29 MB) | 8.73 MB (7.86 MB–9.36 MB) | 7% (6%–8%) |
+| Naive last-write-wins | single uplink | 37 (34–50) | 0.85 s (0.50 s–1.10 s) | 0.10 MB (0.09 MB–0.10 MB) | 8.73 MB (7.90 MB–9.08 MB) | 5% (4%–6%) |
+
+For delta sync, the single uplink cut internet bytes from 0.56 MB to 0.19 MB (67% less) and redundant answers from 35% to 2%, while time to converge after reconnect went from 1.28 s to 1.29 s (medians).
 
 ## What the columns mean
 
@@ -37,27 +53,27 @@ Over all 5 runs, delta sync sent **39.3x fewer bytes** than full-state sync, wit
 - **Duplicates**: order or item rows shown more than once, or orders nobody created. The network duplicates some messages on purpose.
 - **Converged after reconnect**: time from the internet coming back until all four nodes (three devices and the cloud) hold the same data. The naive baseline converges too, just onto data with holes in it.
 - **Bytes**: every message on the wire, as UTF-8 JSON, including version-vector summaries and messages the network then dropped.
-- **Redundant answers**: the share of sync-answer bytes that taught the receiver nothing new, because another peer had already sent the same edits. This happens most right after the reconnect, when the cloud asks all three devices at once and each answers with the same missing edits. An answer counts as useful if it contains even one new edit, so this column flatters full-state sync, whose useful answers are mostly things the receiver already had. Compare total bytes instead.
+- **Redundant answers**: the share of sync-answer bytes that taught the receiver nothing new, because another peer had already sent the same edits. Without the single uplink this happens mostly right after the reconnect, when the cloud asks all three devices at once and each answers with the same missing edits. An answer counts as useful if it contains even one new edit, so this column flatters full-state sync, whose useful answers are mostly things the receiver already had. Compare total bytes instead.
 - **Full-state sync** here is already the generous version: it only sends the whole state when the peer is missing something, instead of every round.
 
 ## Every run
 
 | Engine | Seed | Orders | Items | Status edits applied / skipped | Lost (orders, items, status) | Duplicates | Identical at end | Converged after | LAN bytes | Internet bytes | Answer bytes / redundant | Messages sent / lost / duplicated |
 | --- | --: | --: | --: | --: | --: | --: | --- | --: | --: | --: | --: | --: |
-| CRDT, delta sync | 1 | 220 | 441 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.32 s | 698510 | 562318 | 997189 / 346132 | 4255 / 76 / 44 |
-| CRDT, delta sync | 2 | 220 | 439 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.43 s | 701171 | 560190 | 1003508 / 347001 | 4297 / 80 / 41 |
-| CRDT, delta sync | 3 | 220 | 431 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.28 s | 689906 | 559266 | 995645 / 350182 | 4259 / 66 / 44 |
-| CRDT, delta sync | 4 | 220 | 430 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.08 s | 697638 | 553459 | 982846 / 336714 | 4269 / 75 / 42 |
-| CRDT, delta sync | 5 | 220 | 438 | 110 / 0 | 0, 0, 0 | 0 | yes | 0.87 s | 697210 | 557028 | 998592 / 348023 | 4267 / 71 / 41 |
-| CRDT, full-state sync | 1 | 220 | 441 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.37 s | 47212300 | 1223725 | 47532582 / 2057491 | 4259 / 80 / 40 |
-| CRDT, full-state sync | 2 | 220 | 439 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.48 s | 48869894 | 1205608 | 49252765 / 1387827 | 4297 / 80 / 41 |
-| CRDT, full-state sync | 3 | 220 | 431 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.37 s | 47775539 | 1214444 | 48644482 / 1784766 | 4267 / 77 / 39 |
-| CRDT, full-state sync | 4 | 220 | 430 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.10 s | 47188073 | 1107029 | 47830483 / 1207484 | 4253 / 76 / 42 |
-| CRDT, full-state sync | 5 | 220 | 438 | 110 / 0 | 0, 0, 0 | 0 | yes | 0.92 s | 49822072 | 1151371 | 50156251 / 1733243 | 4266 / 69 / 40 |
-| Naive last-write-wins | 1 | 220 | 441 | 97 / 13 | 39, 0, 20 | 0 | yes | 0.88 s | 8587648 | 285668 | 8523179 / 541675 | 4195 / 73 / 39 |
-| Naive last-write-wins | 2 | 220 | 439 | 90 / 20 | 41, 0, 18 | 0 | yes | 0.95 s | 8440583 | 292341 | 8381520 / 530511 | 4221 / 80 / 48 |
-| Naive last-write-wins | 3 | 220 | 431 | 99 / 11 | 47, 0, 19 | 0 | yes | 0.82 s | 7727196 | 264380 | 7712880 / 512316 | 4172 / 65 / 43 |
-| Naive last-write-wins | 4 | 220 | 430 | 88 / 22 | 51, 0, 10 | 0 | yes | 0.58 s | 7595570 | 265274 | 7555002 / 576289 | 4178 / 79 / 34 |
-| Naive last-write-wins | 5 | 220 | 438 | 96 / 14 | 35, 0, 25 | 0 | yes | 0.41 s | 9088442 | 276441 | 9043433 / 615836 | 4186 / 67 / 40 |
+| CRDT, delta sync | 1 | 220 | 441 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.53 s | 696774 | 188295 | 656737 / 6766 | 3723 / 72 / 38 |
+| CRDT, delta sync | 2 | 220 | 439 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.45 s | 698599 | 186631 | 667530 / 14072 | 3756 / 69 / 44 |
+| CRDT, delta sync | 3 | 220 | 431 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.29 s | 708003 | 186575 | 661857 / 15867 | 3746 / 72 / 40 |
+| CRDT, delta sync | 4 | 220 | 430 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.16 s | 695252 | 185797 | 659201 / 13520 | 3736 / 67 / 36 |
+| CRDT, delta sync | 5 | 220 | 438 | 110 / 0 | 0, 0, 0 | 0 | yes | 0.95 s | 708002 | 185532 | 663692 / 14819 | 3744 / 64 / 38 |
+| CRDT, full-state sync | 1 | 220 | 441 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.59 s | 46198667 | 398464 | 45891088 / 690532 | 3723 / 72 / 38 |
+| CRDT, full-state sync | 2 | 220 | 439 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.50 s | 48149256 | 401313 | 48427226 / 1044087 | 3756 / 69 / 44 |
+| CRDT, full-state sync | 3 | 220 | 431 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.35 s | 48803819 | 415408 | 48342802 / 1217876 | 3751 / 72 / 40 |
+| CRDT, full-state sync | 4 | 220 | 430 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.25 s | 48328340 | 384432 | 47525496 / 708348 | 3746 / 69 / 37 |
+| CRDT, full-state sync | 5 | 220 | 438 | 110 / 0 | 0, 0, 0 | 0 | yes | 1.01 s | 50300448 | 332005 | 49722498 / 1306445 | 3745 / 65 / 37 |
+| Naive last-write-wins | 1 | 220 | 441 | 98 / 12 | 37, 0, 20 | 0 | yes | 1.10 s | 8631153 | 100303 | 8370182 / 379605 | 3670 / 66 / 41 |
+| Naive last-write-wins | 2 | 220 | 439 | 91 / 19 | 37, 0, 20 | 0 | yes | 0.94 s | 8697457 | 101744 | 8454969 / 372311 | 3690 / 68 / 44 |
+| Naive last-write-wins | 3 | 220 | 431 | 99 / 11 | 46, 0, 19 | 0 | yes | 0.85 s | 7956819 | 95997 | 7740056 / 419963 | 3654 / 71 / 41 |
+| Naive last-write-wins | 4 | 220 | 430 | 89 / 21 | 50, 0, 9 | 0 | yes | 0.70 s | 7809053 | 93618 | 7669837 / 479775 | 3665 / 66 / 35 |
+| Naive last-write-wins | 5 | 220 | 438 | 94 / 16 | 34, 0, 26 | 0 | yes | 0.50 s | 8991781 | 90904 | 8789608 / 479032 | 3662 / 63 / 35 |
 
 Status edits are skipped when the device making them did not yet know the order, or already saw it at or past that stage. For the naive baseline this mostly means the order had been lost.

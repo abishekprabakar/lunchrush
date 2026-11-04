@@ -7,8 +7,17 @@ const ENGINE_LABEL: Record<EngineKind, string> = {
   baseline: 'Naive last-write-wins',
 };
 
-/** Render benchmark results as the markdown saved to results.md. Pure, so the same results give the same file. */
-export function renderResults(results: LunchRushResult[], config: LunchRushConfig, command: string): string {
+/**
+ * Render benchmark results as the markdown saved to results.md. Pure, so the
+ * same results give the same file. `withoutUplink` holds the same runs with
+ * single uplink turned off, for the before/after comparison.
+ */
+export function renderResults(
+  results: LunchRushResult[],
+  config: LunchRushConfig,
+  command: string,
+  withoutUplink: LunchRushResult[] = [],
+): string {
   const engines = [...new Set(results.map((r) => r.engine))];
   const seeds = [...new Set(results.map((r) => r.seed))];
   const of = (engine: EngineKind) => results.filter((r) => r.engine === engine);
@@ -32,7 +41,10 @@ export function renderResults(results: LunchRushResult[], config: LunchRushConfi
     config.driveThruSeesKitchen
       ? '- Every device can reach every other device on the LAN.'
       : '- The drive-thru tablet and the kitchen display cannot reach each other directly, so their edits relay through the counter (multihop).',
-    `- Every node gossips every ${config.gossipIntervalMs} ms with each node it can reach.`,
+    `- Every node gossips every ${config.gossipIntervalMs} ms with the nodes it can reach.`,
+    config.singleUplink
+      ? '- Single uplink: only the device with the lowest id among those it can see on the LAN (here the counter) syncs with the cloud, and the others reach the cloud through it. The cloud only gossips with devices that contacted it recently, and greets a device that comes back after a silence (see `uplink.ts`).'
+      : '- Every device syncs with the cloud directly.',
     `- LAN links: ${linkText(config.lan)}.`,
     `- Internet links: ${linkText(config.internet)}, shared by the whole store.`,
     `- Device clock skew: ${Object.entries(config.clockSkewMs)
@@ -50,9 +62,8 @@ export function renderResults(results: LunchRushResult[], config: LunchRushConfi
   );
   for (const engine of engines) {
     const runs = of(engine);
-    const converge = runs.map((r) => r.convergeMs);
     lines.push(
-      `| ${ENGINE_LABEL[engine]} | ${stat(runs.map((r) => r.ordersLost), String)} | ${stat(runs.map((r) => r.itemsLost), String)} | ${stat(runs.map((r) => r.statusLost), String)} | ${stat(runs.map((r) => r.duplicates), String)} | ${converge.includes(null) ? `did not converge in ${converge.filter((c) => c === null).length} of ${runs.length} runs` : stat(converge as number[], seconds)} | ${stat(runs.map((r) => r.bytesLan), megabytes)} | ${stat(runs.map((r) => r.bytesInternet), megabytes)} | ${stat(runs.map((r) => r.bytesLan + r.bytesInternet), megabytes)} | ${stat(runs.map(redundantShare), percentOf)} |`,
+      `| ${ENGINE_LABEL[engine]} | ${stat(runs.map((r) => r.ordersLost), String)} | ${stat(runs.map((r) => r.itemsLost), String)} | ${stat(runs.map((r) => r.statusLost), String)} | ${stat(runs.map((r) => r.duplicates), String)} | ${convergeText(runs)} | ${stat(runs.map((r) => r.bytesLan), megabytes)} | ${stat(runs.map((r) => r.bytesInternet), megabytes)} | ${stat(runs.map((r) => r.bytesLan + r.bytesInternet), megabytes)} | ${stat(runs.map(redundantShare), percentOf)} |`,
     );
   }
   lines.push('');
@@ -65,6 +76,27 @@ export function renderResults(results: LunchRushResult[], config: LunchRushConfi
     );
   }
 
+  if (withoutUplink.length > 0) {
+    lines.push('## Single uplink: before and after', '');
+    lines.push(
+      '**Before**, every device synced with the cloud on its own, so right after the reconnect the cloud asked all three devices for what it missed and each answered with the same edits. **After**, the store\'s cloud traffic goes through one device. Same seeds and same workloads; only the gossip rule differs. Medians across seeds, ranges in parentheses.',
+      '',
+      '| Engine | Cloud sync | Orders lost | Converged after reconnect | Internet bytes | Total bytes | Redundant answers |',
+      '| --- | --- | --: | --: | --: | --: | --: |',
+    );
+    for (const engine of engines) {
+      for (const [label, runs] of [
+        ['every device', withoutUplink.filter((r) => r.engine === engine)],
+        ['single uplink', of(engine)],
+      ] as const) {
+        lines.push(
+          `| ${ENGINE_LABEL[engine]} | ${label} | ${stat(runs.map((r) => r.ordersLost), String)} | ${convergeText(runs)} | ${stat(runs.map((r) => r.bytesInternet), megabytes)} | ${stat(runs.map((r) => r.bytesLan + r.bytesInternet), megabytes)} | ${stat(runs.map(redundantShare), percentOf)} |`,
+        );
+      }
+    }
+    lines.push('', uplinkSentence(withoutUplink, results), '');
+  }
+
   lines.push('## What the columns mean', '');
   lines.push(
     '- **Orders lost**: orders a device created that are missing on at least one node at the end.',
@@ -73,7 +105,7 @@ export function renderResults(results: LunchRushResult[], config: LunchRushConfi
     '- **Duplicates**: order or item rows shown more than once, or orders nobody created. The network duplicates some messages on purpose.',
     '- **Converged after reconnect**: time from the internet coming back until all four nodes (three devices and the cloud) hold the same data. The naive baseline converges too, just onto data with holes in it.',
     '- **Bytes**: every message on the wire, as UTF-8 JSON, including version-vector summaries and messages the network then dropped.',
-    '- **Redundant answers**: the share of sync-answer bytes that taught the receiver nothing new, because another peer had already sent the same edits. This happens most right after the reconnect, when the cloud asks all three devices at once and each answers with the same missing edits. An answer counts as useful if it contains even one new edit, so this column flatters full-state sync, whose useful answers are mostly things the receiver already had. Compare total bytes instead.',
+    '- **Redundant answers**: the share of sync-answer bytes that taught the receiver nothing new, because another peer had already sent the same edits. Without the single uplink this happens mostly right after the reconnect, when the cloud asks all three devices at once and each answers with the same missing edits. An answer counts as useful if it contains even one new edit, so this column flatters full-state sync, whose useful answers are mostly things the receiver already had. Compare total bytes instead.',
     '- **Full-state sync** here is already the generous version: it only sends the whole state when the peer is missing something, instead of every round.',
     '',
   );
@@ -100,7 +132,7 @@ export function renderResults(results: LunchRushResult[], config: LunchRushConfi
  * A short summary for README.md and EXPLAINER.md. bench.ts pastes it between
  * marker comments, so the numbers in the docs always come from the latest run.
  */
-export function renderSummary(results: LunchRushResult[]): string {
+export function renderSummary(results: LunchRushResult[], withoutUplink: LunchRushResult[] = []): string {
   const engines = [...new Set(results.map((r) => r.engine))];
   const seeds = new Set(results.map((r) => r.seed)).size;
   const of = (engine: EngineKind) => results.filter((r) => r.engine === engine);
@@ -128,7 +160,25 @@ export function renderSummary(results: LunchRushResult[]): string {
       `Delta sync sent ${(sumOf('crdt-full', all) / sumOf('crdt-delta', all)).toFixed(1)}x fewer bytes than full-state sync in total, but only ${(sumOf('crdt-full', internet) / sumOf('crdt-delta', internet)).toFixed(1)}x fewer over the internet. ${Math.round(redundant * 100)}% of the bytes in delta-sync answers taught the receiver nothing new.`,
     );
   }
+  if (withoutUplink.length > 0) lines.push('', uplinkSentence(withoutUplink, results));
   return lines.join('\n');
+}
+
+/** One generated sentence comparing delta sync with and without the single uplink. */
+function uplinkSentence(before: LunchRushResult[], after: LunchRushResult[]): string {
+  const delta = (runs: LunchRushResult[]) => runs.filter((r) => r.engine === 'crdt-delta');
+  const [b, a] = [delta(before), delta(after)];
+  const internetBefore = median(b.map((r) => r.bytesInternet));
+  const internetAfter = median(a.map((r) => r.bytesInternet));
+  return `For delta sync, the single uplink cut internet bytes from ${megabytes(internetBefore)} to ${megabytes(internetAfter)} (${Math.round((1 - internetAfter / internetBefore) * 100)}% less) and redundant answers from ${percentOf(median(b.map(redundantShare)))} to ${percentOf(median(a.map(redundantShare)))}, while time to converge after reconnect went from ${convergeText(b, false)} to ${convergeText(a, false)} (medians).`;
+}
+
+/** Median time to converge (with range), or how many runs never converged. */
+function convergeText(runs: LunchRushResult[], withRange = true): string {
+  const times = runs.map((r) => r.convergeMs);
+  const never = times.filter((t) => t === null).length;
+  if (never > 0) return `did not converge in ${never} of ${runs.length} runs`;
+  return withRange ? stat(times as number[], seconds) : seconds(median(times as number[]));
 }
 
 function median(values: number[]): number {

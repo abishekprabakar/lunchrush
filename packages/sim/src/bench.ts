@@ -12,22 +12,28 @@ import { renderResults, renderSummary } from './report';
 
 const SEEDS = [1, 2, 3, 4, 5];
 
-const results: LunchRushResult[] = [];
-for (const engine of ENGINE_KINDS) {
-  for (const seed of SEEDS) {
-    const started = performance.now();
-    results.push(runLunchRush(engine, seed, LUNCH_RUSH));
-    console.error(`${engine} seed ${seed}: ${((performance.now() - started) / 1000).toFixed(1)} s of real time`);
+function runAll(config: typeof LUNCH_RUSH, label: string): LunchRushResult[] {
+  const results: LunchRushResult[] = [];
+  for (const engine of ENGINE_KINDS) {
+    for (const seed of SEEDS) {
+      const started = performance.now();
+      results.push(runLunchRush(engine, seed, config));
+      console.error(`${label}: ${engine} seed ${seed}: ${((performance.now() - started) / 1000).toFixed(1)} s of real time`);
+    }
   }
+  return results;
 }
 
+const results = runAll(LUNCH_RUSH, 'single uplink');
+const withoutUplink = runAll({ ...LUNCH_RUSH, singleUplink: false }, 'every device');
+
 const root = new URL('../../../', import.meta.url);
-const markdown = renderResults(results, LUNCH_RUSH, 'pnpm bench');
+const markdown = renderResults(results, LUNCH_RUSH, 'pnpm bench', withoutUplink);
 writeFileSync(new URL('results.md', root), markdown);
 console.log(markdown);
 
 // Paste the summary between the bench markers in the docs, so their numbers always come from this run.
-const summary = renderSummary(results);
+const summary = renderSummary(results, withoutUplink);
 for (const doc of ['README.md', 'EXPLAINER.md']) {
   const file = new URL(doc, root);
   const text = readFileSync(file, 'utf8');
